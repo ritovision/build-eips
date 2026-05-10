@@ -22,7 +22,10 @@ use log::{debug, info, warn};
 use notify::{Event, RecursiveMode, Watcher};
 use snafu::{Report, ResultExt, Whatever};
 
-use crate::{git, live::LiveSource, proposal::OnlyRenderPlan, theme_live::LiveTheme};
+use crate::{
+    git, live::LiveSource, network_upgrades::NetworkUpgradeIndex, proposal::OnlyRenderPlan,
+    theme_live::LiveTheme,
+};
 
 #[derive(Debug)]
 pub(crate) struct DirtyServeWatcher {
@@ -35,6 +38,7 @@ struct ActiveRepoServeSync {
     source_root: PathBuf,
     build_repo_path: PathBuf,
     only_plan: Option<OnlyRenderPlan>,
+    network_upgrade_index: Option<NetworkUpgradeIndex>,
     source_generation: Option<git::SourceGeneration>,
 }
 
@@ -326,7 +330,10 @@ fn dirty_serve_sync_loop(
                 commit,
                 sync_config.configuration.clone(),
             ) {
-                Ok(state) => Some(state),
+                Ok(mut state) => {
+                    state.set_network_upgrade_index(active.network_upgrade_index.clone());
+                    Some(state)
+                }
                 Err(error) => {
                     let _ = ready_tx.send(Err(format!(
                         "unable to initialize live source generation: {}",
@@ -467,6 +474,7 @@ pub(crate) fn serve_sync_config(
     source_root: &Path,
     repo_path: &Path,
     only_plan: Option<OnlyRenderPlan>,
+    network_upgrade_index: Option<NetworkUpgradeIndex>,
     local_theme_sync: Option<LocalThemeServeSync>,
 ) -> ServeSyncConfig {
     ServeSyncConfig {
@@ -476,6 +484,7 @@ pub(crate) fn serve_sync_config(
                 source_root: source_root.to_path_buf(),
                 build_repo_path: repo_path.to_path_buf(),
                 only_plan,
+                network_upgrade_index,
                 source_generation: None,
             }
         }),
@@ -657,6 +666,7 @@ mod tests {
             &temp.path().join("Core"),
             &temp.path().join(".local-build/Core/repo"),
             Some(plan),
+            None,
             Some(fake_theme_sync(temp.path())),
         );
 
@@ -678,6 +688,7 @@ mod tests {
             SourceMaterialization::Clean,
             &temp.path().join("Core"),
             &temp.path().join(".local-build/Core/repo"),
+            None,
             None,
             Some(fake_theme_sync(temp.path())),
         );

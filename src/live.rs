@@ -11,8 +11,11 @@
 
 use crate::{
     generation::{file_stamps, source_stamp, Snapshot},
-    git, markdown,
-    proposal::{OnlyRenderPlan, ProposalNumber},
+    git,
+    layout::CONTENT_DIR,
+    markdown,
+    network_upgrades::{self, NetworkUpgradeIndex},
+    proposal::{proposal_number_from_content_markdown_path, OnlyRenderPlan, ProposalNumber},
 };
 use git2::{
     build::CheckoutBuilder, ObjectType, Oid, Repository, Signature, TreeWalkMode, TreeWalkResult,
@@ -33,6 +36,7 @@ pub(crate) struct LiveSource {
     last_good_tree: Oid,
     publication_uncertain: bool,
     configuration: crate::execution::ConfigurationSnapshot,
+    network_upgrade_index: Option<NetworkUpgradeIndex>,
     sibling_files: BTreeMap<PathBuf, (Oid, i32)>,
     previous_head: Oid,
     previous_paths: BTreeSet<PathBuf>,
@@ -59,6 +63,36 @@ fn tree_files(repo: &Repository, commit: Oid) -> Result<BTreeMap<PathBuf, (Oid, 
     })
     .whatever_context("unable to inventory source tree")?;
     Ok(paths)
+}
+
+fn is_hardfork_meta_eip_path(source_root: &Path, repo_relative_path: &Path) -> bool {
+    let Ok(content_relative_path) = repo_relative_path.strip_prefix(CONTENT_DIR) else {
+        return false;
+    };
+    let Some(proposal_number) = proposal_number_from_content_markdown_path(content_relative_path)
+    else {
+        return false;
+    };
+
+    if network_upgrades::is_registered_network_upgrade_source_number(proposal_number) {
+        return true;
+    }
+
+    std::fs::read_to_string(source_root.join(repo_relative_path))
+        .map(|contents| network_upgrades::markdown_has_network_upgrade_marker(&contents))
+        .unwrap_or(false)
+}
+
+fn warn_for_changed_hardfork_meta_eips(source_root: &Path, affected_paths: &BTreeSet<PathBuf>) {
+    for path in affected_paths
+        .iter()
+        .filter(|path| is_hardfork_meta_eip_path(source_root, path))
+    {
+        log::warn!(
+            "edit detected in hardfork Meta EIP `{}`; restart `build-eips serve` to refresh /hardforks/ and member EIP rows",
+            path.to_string_lossy()
+        );
+    }
 }
 
 impl LiveSource {
@@ -122,6 +156,7 @@ impl LiveSource {
                 .id(),
             publication_uncertain: false,
             configuration,
+            network_upgrade_index: None,
             sibling_files,
             previous_head: generation.source_head,
             previous_paths: active_files
@@ -136,6 +171,10 @@ impl LiveSource {
         // prepared generation rather than merely sampling status after a gap.
         state.synchronize_inner(true)?;
         Ok(state)
+    }
+
+    pub(crate) fn set_network_upgrade_index(&mut self, index: Option<NetworkUpgradeIndex>) {
+        self.network_upgrade_index = index;
     }
 
     pub(crate) fn needs_publication_retry(&self) -> bool {
@@ -165,6 +204,7 @@ impl LiveSource {
         if affected.is_empty() {
             return Ok(0);
         }
+        warn_for_changed_hardfork_meta_eips(&self.source, &affected);
         self.pending.extend(affected.iter().cloned());
         let files_before = file_stamps(&self.source, &affected)?;
         let repo = git::open_generated_repository(&self.stage)
@@ -362,10 +402,13 @@ impl LiveSource {
                     .is_some_and(|n| self.selection.as_ref().unwrap().contains(&n))
             });
         }
-        markdown::preprocess_paths(&self.stage.join("content"), &publish, plan.as_ref())
-            .whatever_context(
-                "unable to preprocess candidate generation; last-good input retained",
-            )?;
+        markdown::preprocess_paths_with_network_upgrades(
+            &self.stage.join("content"),
+            &publish,
+            plan.as_ref(),
+            self.network_upgrade_index.as_ref(),
+        )
+        .whatever_context("unable to preprocess candidate generation; last-good input retained")?;
         if source_stamp(&self.source)? != stamp
             || file_stamps(&self.source, &affected)? != files_before
         {
