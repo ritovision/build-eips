@@ -20,6 +20,7 @@ mod layout;
 mod lint;
 mod live;
 mod markdown;
+mod network_upgrades;
 mod pipeline;
 mod preview;
 mod print;
