@@ -28,6 +28,7 @@ mod progress;
 mod proposal;
 mod proposal_catalog;
 mod proposal_metadata;
+mod search;
 mod serve;
 mod source_reads;
 mod theme_live;

@@ -574,6 +574,7 @@ mod tests {
             source_materialization: crate::git::SourceMaterialization::Clean,
             server_binding: ServerBinding::default(),
             base_url_override: None,
+            search: Default::default(),
         }
     }
 
@@ -787,6 +788,7 @@ mod tests {
             source_materialization: crate::git::SourceMaterialization::Clean,
             server_binding: ServerBinding::default(),
             base_url_override: None,
+            search: Default::default(),
         };
         let selectors = EditorialSelectorArgs {
             paths: Vec::new(),

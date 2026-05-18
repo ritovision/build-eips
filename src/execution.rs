@@ -23,6 +23,7 @@ use crate::{
     git,
     layout::BUILD_DIR,
     proposal::ProposalNumber,
+    search::SearchConfig,
 };
 
 /// Immutable provenance of the exact physical configuration parsed at resolution.
@@ -58,6 +59,7 @@ pub(crate) struct ResolvedExecution {
     pub(crate) source_materialization: git::SourceMaterialization,
     pub(crate) server_binding: ServerBinding,
     pub(crate) base_url_override: Option<Url>,
+    pub(crate) search: SearchConfig,
 }
 
 impl ResolvedExecution {
@@ -357,6 +359,23 @@ fn clean_active_source_requested(args: &Args) -> bool {
     args.operation.clean_cli_args().clean || matches!(args.operation, Operation::Changed { .. })
 }
 
+fn resolve_search_config(
+    args: &Args,
+    workspace_config: Option<&LoadedWorkspaceConfig>,
+) -> SearchConfig {
+    let mut search = workspace_config
+        .map(|config| SearchConfig {
+            pagefind: config.search_settings().pagefind,
+        })
+        .unwrap_or_default();
+
+    if args.operation.search_cli_args().no_search {
+        search.pagefind = false;
+    }
+
+    search
+}
+
 pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatever> {
     let root_path = root(args)?;
 
@@ -415,6 +434,7 @@ pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatev
         git::SourceMaterialization::Clean
     };
     let base_url_override = resolve_base_url_override(args, workspace_config.as_ref())?;
+    let search = resolve_search_config(args, workspace_config.as_ref());
 
     Ok(ResolvedExecution {
         configuration,
@@ -429,6 +449,7 @@ pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatev
             &args.operation.server_cli_args(),
         ),
         base_url_override,
+        search,
     })
 }
 
@@ -443,8 +464,8 @@ mod tests {
     };
 
     use super::{
-        resolve_execution_settings, resolve_only_selection, resolve_server_binding,
-        resolve_theme_path, SelectedSource,
+        resolve_execution_settings, resolve_only_selection, resolve_search_config,
+        resolve_server_binding, resolve_theme_path, SelectedSource,
     };
 
     fn parse_args(arguments: &[&str]) -> Args {
@@ -655,6 +676,18 @@ only = []
 
         assert_eq!(settings.sibling, SelectedSource::Remote);
         assert_theme_only_missing_workspace_error(&["build-eips", "--remote-siblings", "build"]);
+    }
+
+    #[test]
+    fn search_config_defaults_workspace_and_cli_override_are_explicit() {
+        let build = parse_args(&["build-eips", "build"]);
+        assert!(resolve_search_config(&build, None).pagefind);
+
+        let disabled = load_workspace_config("[search]\npagefind = false\n");
+        assert!(!resolve_search_config(&build, Some(&disabled)).pagefind);
+
+        let no_search = parse_args(&["build-eips", "build", "--no-search"]);
+        assert!(!resolve_search_config(&no_search, None).pagefind);
     }
 
     #[test]

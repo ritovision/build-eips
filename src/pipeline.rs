@@ -19,6 +19,10 @@ use crate::{
     markdown, network_upgrades,
     proposal::OnlyRenderPlan,
     proposal_catalog, proposal_metadata,
+    search::{
+        self, SearchConfig, SearchIndexRequest, SearchIndexSummary, SearchRouteSummary,
+        SearchTemplateState,
+    },
     serve::{serve_sync_config, DirtyServeWatcher, LocalThemeServeSync},
     zola,
 };
@@ -111,6 +115,47 @@ pub(crate) struct Prepared {
     source_materialization: git::SourceMaterialization,
     server_binding: ServerBinding,
     base_url_override: Option<Url>,
+    search: SearchConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchIndexMode {
+    Build,
+    #[cfg(test)]
+    Check,
+    #[cfg(test)]
+    Serve,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SearchRouteMode {
+    Build,
+    Check,
+    Serve,
+}
+
+fn should_index_search(mode: SearchIndexMode, search: SearchConfig) -> bool {
+    matches!(mode, SearchIndexMode::Build) && search.pagefind
+}
+
+fn search_route_enabled(mode: SearchRouteMode, search: SearchConfig) -> bool {
+    matches!(mode, SearchRouteMode::Build) && search.pagefind
+}
+
+fn run_search_index(
+    mode: SearchIndexMode,
+    output_path: &Path,
+    search_config: SearchConfig,
+) -> Result<Option<SearchIndexSummary>, Whatever> {
+    if !should_index_search(mode, search_config) {
+        return Ok(None);
+    }
+
+    search::index_site(SearchIndexRequest {
+        output_path: output_path.to_path_buf(),
+    })
+    .map(Some)
+    .whatever_context("search indexing failed")
 }
 
 impl Prepared {
@@ -127,6 +172,7 @@ impl Prepared {
             source_materialization,
             server_binding,
             base_url_override,
+            search,
         } = resolved;
         configuration.verify()?;
         let theme_path =
@@ -142,6 +188,8 @@ impl Prepared {
             &repository_use,
             source_materialization,
         )?;
+        search::ensure_search_route_available(&content_path)
+            .whatever_context("unable to reserve generated search route")?;
 
         crate::source_reads::validate_tree(&repo_path)
             .whatever_context("prepared proposal input violates source-read policy")?;
@@ -172,14 +220,13 @@ impl Prepared {
             source_materialization,
             server_binding,
             base_url_override,
+            search,
         })
     }
 
     pub(crate) fn build(self) -> Result<(), Whatever> {
-        let base_url = self
-            .base_url_override
-            .as_ref()
-            .unwrap_or(&self.repository_use.location.base_url);
+        let base_url = self.resolved_base_url().clone();
+        let _ = self.write_search_route_for_zola(SearchRouteMode::Build)?;
         zola::build(
             &self.theme_path,
             &self.repo_path,
@@ -187,10 +234,12 @@ impl Prepared {
             base_url.as_str(),
         )
         .whatever_context("zola build failed")?;
+        let _ = run_search_index(SearchIndexMode::Build, &self.output_path, self.search)?;
         Ok(())
     }
 
     pub(crate) fn serve(self) -> Result<(), Whatever> {
+        let _ = self.write_search_route_for_zola(SearchRouteMode::Serve)?;
         let mut sync_config = serve_sync_config(
             self.source_materialization,
             &self.source_root,
@@ -227,8 +276,30 @@ impl Prepared {
     }
 
     pub(crate) fn check(self) -> Result<(), Whatever> {
+        let _ = self.write_search_route_for_zola(SearchRouteMode::Check)?;
         zola::check(&self.theme_path, &self.repo_path).whatever_context("zola check failed")?;
         Ok(())
+    }
+
+    fn resolved_base_url(&self) -> &Url {
+        self.base_url_override
+            .as_ref()
+            .unwrap_or(&self.repository_use.location.base_url)
+    }
+
+    fn search_template_state(&self, mode: SearchRouteMode) -> SearchTemplateState {
+        SearchTemplateState::from_base_url(
+            search_route_enabled(mode, self.search),
+            self.resolved_base_url(),
+        )
+    }
+
+    fn write_search_route_for_zola(
+        &self,
+        mode: SearchRouteMode,
+    ) -> Result<SearchRouteSummary, Whatever> {
+        search::write_search_route(&self.repo_path, self.search_template_state(mode))
+            .whatever_context("unable to write generated search route")
     }
 }
 

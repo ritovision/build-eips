@@ -68,6 +68,13 @@ pub(crate) struct OnlyCliArgs {
     pub(crate) only: Vec<ProposalNumber>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
+pub(crate) struct SearchCliArgs {
+    /// Skip Pagefind search indexing for this build
+    #[arg(long)]
+    pub(crate) no_search: bool,
+}
+
 #[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Operation {
     /// Print linter schema metadata and lint configuration
@@ -86,6 +93,9 @@ pub(crate) enum Operation {
 
         #[command(flatten)]
         only: OnlyCliArgs,
+
+        #[command(flatten)]
+        search: SearchCliArgs,
     },
 
     /// Serve the existing built output without rebuilding it
@@ -268,6 +278,21 @@ impl Operation {
         }
     }
 
+    pub(crate) fn search_cli_args(&self) -> SearchCliArgs {
+        match self {
+            Self::Build { search, .. } => search.clone(),
+            Self::Print { .. }
+            | Self::Serve { .. }
+            | Self::Preview { .. }
+            | Self::Clean
+            | Self::Check { .. }
+            | Self::Changed { .. }
+            | Self::Editorial { .. }
+            | Self::Init { .. }
+            | Self::Doctor => SearchCliArgs::default(),
+        }
+    }
+
     pub(crate) fn is_plain_site_command(&self) -> bool {
         matches!(
             self,
@@ -438,6 +463,14 @@ mod tests {
         }
 
         assert!(Args::try_parse_from(["build-eips", "check", "--only", "555"]).is_err());
+    }
+
+    #[test]
+    fn no_search_flag_parses_only_on_build() {
+        let build = parse_args(&["build-eips", "build", "--no-search"]);
+        assert!(build.operation.search_cli_args().no_search);
+        assert!(Args::try_parse_from(["build-eips", "serve", "--no-search"]).is_err());
+        assert!(Args::try_parse_from(["build-eips", "check", "--no-search"]).is_err());
     }
 
     #[test]
