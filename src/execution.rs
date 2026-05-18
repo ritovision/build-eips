@@ -9,7 +9,7 @@
 use std::{
     collections::BTreeSet,
     io::ErrorKind,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
 };
 
 use log::{debug, info};
@@ -23,7 +23,7 @@ use crate::{
     git,
     layout::BUILD_DIR,
     proposal::ProposalNumber,
-    search::SearchConfig,
+    search::{SearchConfig, SearchCorpusConfig},
 };
 
 /// Immutable provenance of the exact physical configuration parsed at resolution.
@@ -362,10 +362,16 @@ fn clean_active_source_requested(args: &Args) -> bool {
 fn resolve_search_config(
     args: &Args,
     workspace_config: Option<&LoadedWorkspaceConfig>,
-) -> SearchConfig {
-    let mut search = workspace_config
-        .map(|config| SearchConfig {
-            pagefind: config.search_settings().pagefind,
+) -> Result<SearchConfig, Whatever> {
+    let search_settings = workspace_config.map(|config| config.search_settings());
+    let mut search = search_settings
+        .map(|settings| SearchConfig {
+            pagefind: settings.pagefind,
+            corpus: SearchCorpusConfig {
+                enabled: settings.corpus.enabled,
+                format: settings.corpus.format,
+                output: settings.corpus.output.clone(),
+            },
         })
         .unwrap_or_default();
 
@@ -373,7 +379,48 @@ fn resolve_search_config(
         search.pagefind = false;
     }
 
-    search
+    if let Some(format) = args.operation.search_cli_args().search_corpus {
+        search.corpus.enabled = true;
+        if let Some(format) = format {
+            search.corpus.format = format;
+        }
+    }
+
+    validate_search_corpus_output(&search.corpus.output)?;
+
+    Ok(search)
+}
+
+fn validate_search_corpus_output(output: &Path) -> Result<(), Whatever> {
+    if output.as_os_str().is_empty() || output.is_absolute() {
+        snafu::whatever!(
+            "search corpus output path `{}` must be relative to the rendered output directory",
+            output.to_string_lossy()
+        );
+    }
+
+    for component in output.components() {
+        match component {
+            Component::Normal(value) if value == "pagefind" => {
+                snafu::whatever!(
+                    "search corpus output path `{}` must not be under `pagefind`",
+                    output.to_string_lossy()
+                );
+            }
+            Component::Normal(_) => {}
+            Component::CurDir
+            | Component::ParentDir
+            | Component::RootDir
+            | Component::Prefix(_) => {
+                snafu::whatever!(
+                    "search corpus output path `{}` must contain only safe relative path components",
+                    output.to_string_lossy()
+                );
+            }
+        }
+    }
+
+    Ok(())
 }
 
 pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatever> {
@@ -434,7 +481,7 @@ pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatev
         git::SourceMaterialization::Clean
     };
     let base_url_override = resolve_base_url_override(args, workspace_config.as_ref())?;
-    let search = resolve_search_config(args, workspace_config.as_ref());
+    let search = resolve_search_config(args, workspace_config.as_ref())?;
 
     Ok(ResolvedExecution {
         configuration,
@@ -681,13 +728,17 @@ only = []
     #[test]
     fn search_config_defaults_workspace_and_cli_override_are_explicit() {
         let build = parse_args(&["build-eips", "build"]);
-        assert!(resolve_search_config(&build, None).pagefind);
+        assert!(resolve_search_config(&build, None).unwrap().pagefind);
 
         let disabled = load_workspace_config("[search]\npagefind = false\n");
-        assert!(!resolve_search_config(&build, Some(&disabled)).pagefind);
+        assert!(
+            !resolve_search_config(&build, Some(&disabled))
+                .unwrap()
+                .pagefind
+        );
 
         let no_search = parse_args(&["build-eips", "build", "--no-search"]);
-        assert!(!resolve_search_config(&no_search, None).pagefind);
+        assert!(!resolve_search_config(&no_search, None).unwrap().pagefind);
     }
 
     #[test]

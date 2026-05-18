@@ -20,8 +20,8 @@ use crate::{
     proposal::OnlyRenderPlan,
     proposal_catalog, proposal_metadata,
     search::{
-        self, SearchConfig, SearchIndexRequest, SearchIndexSummary, SearchRouteSummary,
-        SearchTemplateState,
+        self, SearchConfig, SearchCorpusRequest, SearchCorpusSummary, SearchIndexRequest,
+        SearchIndexSummary, SearchRouteSummary, SearchTemplateState,
     },
     serve::{serve_sync_config, DirtyServeWatcher, LocalThemeServeSync},
     zola,
@@ -134,18 +134,18 @@ enum SearchRouteMode {
     Serve,
 }
 
-fn should_index_search(mode: SearchIndexMode, search: SearchConfig) -> bool {
+fn should_index_search(mode: SearchIndexMode, search: &SearchConfig) -> bool {
     matches!(mode, SearchIndexMode::Build) && search.pagefind
 }
 
-fn search_route_enabled(mode: SearchRouteMode, search: SearchConfig) -> bool {
+fn search_route_enabled(mode: SearchRouteMode, search: &SearchConfig) -> bool {
     matches!(mode, SearchRouteMode::Build) && search.pagefind
 }
 
 fn run_search_index(
     mode: SearchIndexMode,
     output_path: &Path,
-    search_config: SearchConfig,
+    search_config: &SearchConfig,
 ) -> Result<Option<SearchIndexSummary>, Whatever> {
     if !should_index_search(mode, search_config) {
         return Ok(None);
@@ -156,6 +156,24 @@ fn run_search_index(
     })
     .map(Some)
     .whatever_context("search indexing failed")
+}
+
+fn run_search_corpus(
+    mode: SearchIndexMode,
+    output_path: &Path,
+    base_url: &Url,
+    search_config: &SearchConfig,
+) -> Result<Option<SearchCorpusSummary>, Whatever> {
+    if !matches!(mode, SearchIndexMode::Build) {
+        return Ok(None);
+    }
+
+    search::reconcile_corpus(SearchCorpusRequest {
+        output_path: output_path.to_path_buf(),
+        base_url: base_url.clone(),
+        config: search_config.corpus.clone(),
+    })
+    .whatever_context("search corpus output failed")
 }
 
 impl Prepared {
@@ -234,7 +252,13 @@ impl Prepared {
             base_url.as_str(),
         )
         .whatever_context("zola build failed")?;
-        let _ = run_search_index(SearchIndexMode::Build, &self.output_path, self.search)?;
+        let _ = run_search_index(SearchIndexMode::Build, &self.output_path, &self.search)?;
+        let _ = run_search_corpus(
+            SearchIndexMode::Build,
+            &self.output_path,
+            &base_url,
+            &self.search,
+        )?;
         Ok(())
     }
 
@@ -289,7 +313,7 @@ impl Prepared {
 
     fn search_template_state(&self, mode: SearchRouteMode) -> SearchTemplateState {
         SearchTemplateState::from_base_url(
-            search_route_enabled(mode, self.search),
+            search_route_enabled(mode, &self.search),
             self.resolved_base_url(),
         )
     }

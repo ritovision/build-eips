@@ -14,7 +14,7 @@ use std::{
 use clap::{Parser, Subcommand};
 use url::Url;
 
-use crate::{lint, print, proposal::ProposalNumber};
+use crate::{config::SearchCorpusFormat, lint, print, proposal::ProposalNumber};
 
 /// Build script for Ethereum EIPs and ERCs.
 #[derive(Parser, Debug)]
@@ -73,6 +73,15 @@ pub(crate) struct SearchCliArgs {
     /// Skip Pagefind search indexing for this build
     #[arg(long)]
     pub(crate) no_search: bool,
+
+    /// Emit an optional rendered search corpus, optionally choosing the output format
+    #[arg(
+        long,
+        value_enum,
+        value_name = "FORMAT",
+        num_args = 0..=1
+    )]
+    pub(crate) search_corpus: Option<Option<SearchCorpusFormat>>,
 }
 
 #[derive(Debug, Clone, Subcommand)]
@@ -471,6 +480,28 @@ mod tests {
         assert!(build.operation.search_cli_args().no_search);
         assert!(Args::try_parse_from(["build-eips", "serve", "--no-search"]).is_err());
         assert!(Args::try_parse_from(["build-eips", "check", "--no-search"]).is_err());
+    }
+
+    #[test]
+    fn search_corpus_flag_parses_only_on_build() {
+        let bare = parse_args(&["build-eips", "build", "--search-corpus"]);
+        assert_eq!(bare.operation.search_cli_args().search_corpus, Some(None));
+
+        let chunks = parse_args(&[
+            "build-eips",
+            "build",
+            "--no-search",
+            "--search-corpus",
+            "chunks",
+        ]);
+        assert!(chunks.operation.search_cli_args().no_search);
+        assert_eq!(
+            chunks.operation.search_cli_args().search_corpus,
+            Some(Some(SearchCorpusFormat::Chunks))
+        );
+
+        assert!(Args::try_parse_from(["build-eips", "serve", "--search-corpus"]).is_err());
+        assert!(Args::try_parse_from(["build-eips", "check", "--search-corpus"]).is_err());
     }
 
     #[test]
