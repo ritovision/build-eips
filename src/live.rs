@@ -245,6 +245,8 @@ impl LiveSource {
         .whatever_context("unable to remove paths that left the tracked source generation")?;
         git::sync_materialized_paths(&self.source, &self.stage, &eligible)
             .whatever_context("unable to stage current tracked source changes")?;
+        crate::source_reads::validate_tree(&self.stage)
+            .whatever_context("candidate source-read policy rejected; last-good input retained")?;
         let mut index = repo
             .index()
             .whatever_context("unable to open staging index")?;
@@ -342,6 +344,9 @@ impl LiveSource {
             snafu::whatever!("active source changed during preprocessing; last-good input retained until the next update");
         }
         self.configuration.verify()?;
+        crate::source_reads::validate_tree(&self.stage).whatever_context(
+            "transformed source-read policy rejected; last-good input retained",
+        )?;
         // This boundary is intentionally after all parsing and transformation.
         // Publication I/O can still fail midway; keep pending paths for retry.
         self.publication_uncertain = true;

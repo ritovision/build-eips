@@ -109,3 +109,17 @@ Use `build-eips doctor` when the workspace does not behave as expected. It check
 
 [`ethereum/EIPs`]: https://github.com/ethereum/EIPs/
 [`ethereum/ERCs`]: https://github.com/ethereum/ERCs/
+
+## Input trust and local file links
+
+Build inputs must be self-contained: external source/static/theme link targets,
+Git-metadata links, cycles and unresolved links are rejected before rendering.
+Relative links to existing files/directories within the materialized input remain
+supported. Include external assets deliberately rather than linking a build to
+unrelated host files. A local absolute link back to the original checkout is not
+inside the generated input root.
+
+This is not a sandbox for arbitrary untrusted templates or executables. Workspace
+configuration, theme code and tools remain trusted; use an isolated environment
+without secrets when running untrusted code. See `docs/audit/R06.md` for the exact
+read/write/preview boundaries and limitations.

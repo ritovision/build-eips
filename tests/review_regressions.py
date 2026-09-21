@@ -189,6 +189,62 @@ def r05():
         finally:stopserver(proc,f)
 
 
+def r06():
+    secret='EXTERNAL_SENTINEL_NOT_FOR_PUBLICATION'
+    for owner in ('active','theme','sibling'):
+        for kind in ('file','directory'):
+            w,r,t=fixture('read-boundary-'+owner+'-'+kind);outside=w/'outside';write(outside/'secret.txt',secret)
+            if owner=='active':source=r;link=source/'static/linked'
+            elif owner=='theme':source=t;link=source/'static/linked'
+            else:
+                source=w/'ERCs';link=source/'content/00002/assets/linked'
+                write(source/'content/00002/index.md',md(2));write(source/'Build.toml',manifest(source,'ERCs',t,git(t,'rev-parse','HEAD')))
+            link.parent.mkdir(parents=True,exist_ok=True);link.symlink_to(outside/'secret.txt' if kind=='file' else outside,target_is_directory=kind=='directory')
+            if owner=='sibling':
+                initgit(source);write(r/'Build.toml',manifest(r,'EIPs',t,git(t,'rev-parse','HEAD'),{'ERCs':source}));commit(r)
+            else:commit(source)
+            for operation,flags in [('build',[]),('build',['--clean']),('build',['--only','1']),('check',[])]:
+                result=cmd([BIN,'-C',r,'--build-root',w/'generated',operation,*flags],check=False)
+                assert result.returncode!=0 and 'source-read policy' in result.stdout,result.stdout
+            output=w/'generated/output';assert not output.exists() or not any(secret.encode() in p.read_bytes() for p in output.rglob('*') if p.is_file())
+            output.mkdir(parents=True,exist_ok=True);write(output/'index.html','LAST GOOD PUBLIC')
+            proc,f,port=startserver(w,r,operation='preview')
+            try:
+                assert http(port,'/')[1]=='LAST GOOD PUBLIC'
+                assert http(port,'/linked')[0]==404 and http(port,'/linked/secret.txt')[0]==404
+            finally:stopserver(proc,f)
+            assert (outside/'secret.txt').read_text()==secret
+            record('R06-'+owner+'-'+kind+'-rejected',w)
+    w,r,t=fixture('internal-link-controls')
+    for source,prefix in ((r,'active'),(t,'theme')):
+        write(source/'static/data/public.txt',prefix.upper())
+        (source/'static'/f'{prefix}-file.txt').symlink_to('data/public.txt')
+        (source/'static'/f'{prefix}-directory').symlink_to('data',target_is_directory=True);commit(source)
+    result=runbuild(w,r);assert result.returncode==0,result.stdout
+    proc,f,port=startserver(w,r,operation='preview')
+    try:
+        for prefix in ('active','theme'):
+            # Both share data/public.txt; explicit alias paths retain their own sources.
+            assert http(port,f'/{prefix}-file.txt')==(200,prefix.upper())
+            assert http(port,f'/{prefix}-directory/public.txt')==(200,prefix.upper())
+        record('R06-internal-file-directory-link-controls',w)
+    finally:stopserver(proc,f)
+    for owner in ('active','theme'):
+        w,r,t=fixture('live-read-rejection-'+owner);source=r if owner=='active' else t
+        write(source/'static/linked.txt','PUBLIC');commit(source);outside=w/'outside.txt';write(outside,secret)
+        proc,f,port=startserver(w,r)
+        try:
+            assert http(port,'/linked.txt')==(200,'PUBLIC')
+            link=source/'static/linked.txt';link.unlink();link.symlink_to(outside)
+            eventually(lambda:'source-read policy' in (w/'serve.log').read_text(),w,'live external link not rejected')
+            assert http(port,'/linked.txt')==(200,'PUBLIC')
+            link.unlink();write(link,'SAFE RECOVERY')
+            eventually(lambda:http(port,'/linked.txt')==(200,'SAFE RECOVERY'),w,'safe live input did not recover')
+            assert outside.read_text()==secret
+            record('R06-live-'+owner+'-rejection-and-recovery',w)
+        finally:stopserver(proc,f)
+
+
 if __name__=='__main__':
     if os.name!='posix':raise SystemExit('Native Windows acceptance is separate from this POSIX process harness.')
     parser=argparse.ArgumentParser();parser.add_argument('--build-eips',type=Path,required=True);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--cases',nargs='+',default=['r01'])

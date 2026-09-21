@@ -103,6 +103,9 @@ impl LiveTheme {
             .whatever_context("unable to remove obsolete theme generation paths")?;
         git::sync_working_tree_paths(source, &self.stage, &eligible)
             .whatever_context("unable to stage current theme generation")?;
+        crate::source_reads::validate_tree(&self.stage).whatever_context(
+            "candidate theme source-read policy rejected; last-good theme retained",
+        )?;
         if source_stamp(source)? != snapshot.stamp || file_stamps(source, &affected)? != before {
             snafu::whatever!("theme changed during staging; last-good theme retained until retry");
         }

@@ -243,6 +243,7 @@ where
 
     let mounted_theme_path =
         mount_theme(theme_dir, project_path).context(FsSnafu { path: theme_dir })?;
+    crate::source_reads::validate_tree(project_path).context(FsSnafu { path: project_path })?;
     let config_path = theme_config_path(&mounted_theme_path);
 
     let prefix = [OsString::from("-c"), config_path.into()].into_iter();

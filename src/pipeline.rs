@@ -31,6 +31,8 @@ fn prepare_theme_for_zola(
         .whatever_context("unsafe theme mount destination")?;
     git::materialize_working_tree(&theme_path, &mounted_theme_dir)
         .whatever_context("unable to materialize workspace-local theme")?;
+    crate::source_reads::validate_tree(&mounted_theme_dir)
+        .whatever_context("workspace-local theme violates source-read policy")?;
 
     Ok((
         mounted_theme_dir.clone(),
@@ -111,6 +113,8 @@ impl Prepared {
             source_materialization,
         )?;
 
+        crate::source_reads::validate_tree(&repo_path)
+            .whatever_context("prepared proposal input violates source-read policy")?;
         let only_plan = only
             .map(|selected_numbers| OnlyRenderPlan::build(&content_path, selected_numbers))
             .transpose()

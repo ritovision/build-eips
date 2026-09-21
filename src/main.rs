@@ -26,6 +26,7 @@ mod print;
 mod progress;
 mod proposal;
 mod serve;
+mod source_reads;
 mod theme_live;
 mod tree_sync;
 mod workspace;
