@@ -423,11 +423,14 @@ fn dirty_serve_sync_loop(
             Err(RecvTimeoutError::Disconnected) => break,
         };
 
-        let Some(first_event) = first_event else {
+        let retry = active_state
+            .as_ref()
+            .is_some_and(LiveSource::needs_publication_retry);
+        if first_event.is_none() && !retry {
             continue;
-        };
-
-        let mut saw_active_event = false;
+        }
+        let first_event = first_event.unwrap_or_else(|| Ok(Event::new(notify::EventKind::Other)));
+        let mut saw_active_event = retry;
         let mut saw_theme_event = false;
 
         match first_event {

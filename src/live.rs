@@ -176,6 +176,10 @@ impl LiveSource {
         Ok(state)
     }
 
+    pub(crate) fn needs_publication_retry(&self) -> bool {
+        self.publication_uncertain
+    }
+
     pub(crate) fn synchronize(&mut self) -> Result<usize, Whatever> {
         self.synchronize_inner(false)
     }
@@ -374,9 +378,17 @@ impl LiveSource {
         // This boundary is intentionally after all parsing and transformation.
         // Publication I/O can still fail midway; keep pending paths for retry.
         self.publication_uncertain = true;
+        let output = crate::layout::output_path(self.live.parent().unwrap());
+        let refresh = crate::zola::prepare_static_output(&self.stage, &output, &publish)
+            .whatever_context("unable to invalidate stale static output; retry pending")?;
         git::sync_working_tree_paths(&self.stage, &self.live, &publish).whatever_context(
             "unable to publish validated generation; update may be partial, retry pending",
         )?;
+        if refresh {
+            crate::zola::request_full_rebuild(&self.live).whatever_context(
+                "unable to refresh Zola after a static tree transition; retry pending",
+            )?;
+        }
         self.previous_head = stamp.0;
         self.previous_paths = current;
         self.previous_dirty = dirty;

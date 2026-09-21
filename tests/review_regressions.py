@@ -84,6 +84,32 @@ def r03():
         finally:stopserver(proc,f)
 
 
+def r02():
+    w,r,t=fixture('structural-generation');write(r/'static/entry/child.txt','CHILD');commit(r)
+    git(r,'checkout','-qb','file-shape');git(r,'rm','-r','static/entry');write(r/'static/entry','FILE');commit(r);git(r,'checkout','-q','master')
+    proc,f,port=startserver(w,r)
+    try:
+        assert http(port,'/entry/child.txt')==(200,'CHILD')
+        for branch,asset,value,marker in [('file-shape','/entry','FILE','AFTER DIRECTORY TO FILE'),('master','/entry/child.txt','CHILD','AFTER FILE TO DIRECTORY')]:
+            git(r,'checkout','-q',branch)
+            eventually(lambda:http(port,asset)==(200,value),w,'HTTP shape change failed: '+branch)
+            write(r/'content/00001.md',md(1,marker))
+            eventually(lambda:marker in http(port,'/1/')[1],w,'valid edit remained poisoned after '+branch)
+            git(r,'restore','content/00001.md')
+        # Inject an actual publication I/O failure only in owned generated data.
+        target=w/'generated/repo/static';target.chmod(0o555)
+        try:
+            write(r/'static/entry/child.txt','RETRY CONTENT')
+            # Change a directly contained file so unlink requires parent write access.
+            write(r/'static/new.txt','RETRY NEW');git(r,'add','static/new.txt')
+            eventually(lambda:'unable to publish validated generation' in (w/'serve.log').read_text(),w,'publication failure was not exercised')
+        finally:target.chmod(0o755)
+        write(r/'content/00001.md',md(1,'AFTER IO FAILURE'))
+        eventually(lambda:'AFTER IO FAILURE' in http(port,'/1/')[1] and http(port,'/new.txt')==(200,'RETRY NEW'),w,'publication retry did not converge')
+        record('R02-bidirectional-shapes-and-io-recovery',w)
+    finally:stopserver(proc,f)
+
+
 if __name__=='__main__':
     if os.name!='posix':raise SystemExit('Native Windows acceptance is separate from this POSIX process harness.')
     parser=argparse.ArgumentParser();parser.add_argument('--build-eips',type=Path,required=True);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--cases',nargs='+',default=['r01'])

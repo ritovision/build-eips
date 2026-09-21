@@ -125,6 +125,37 @@ fn validate_version_output(text: &str) -> Result<Version, Error> {
     Ok(version)
 }
 
+/// Zola's incremental static copier does not remove an old output directory
+/// when a source directory becomes a file. Normalize disposable output first,
+/// then request a full rebuild only for membership/shape transitions.
+pub(crate) fn prepare_static_output(
+    source: &Path,
+    output: &Path,
+    paths: &std::collections::BTreeSet<std::path::PathBuf>,
+) -> std::io::Result<bool> {
+    let paths = paths
+        .iter()
+        .filter_map(|p| p.strip_prefix("static").ok())
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .collect();
+    let plan = crate::tree_sync::Plan::new(&source.join("static"), output, &paths)?;
+    if plan.shape_changed {
+        plan.prepare_destination(output)?;
+    }
+    Ok(plan.shape_changed)
+}
+
+pub(crate) fn request_full_rebuild(project: &Path) -> std::io::Result<()> {
+    let config = theme_config_path(&crate::layout::mounted_theme_path(project));
+    if !config.exists() {
+        return Ok(());
+    } // isolated non-Zola unit fixtures
+    let resolved = config.canonicalize()?;
+    crate::generated_fs::check_path(&project.canonicalize()?, &resolved, false)?;
+    std::fs::File::open(resolved)?.set_modified(std::time::SystemTime::now())
+}
+
 pub fn check(theme_dir: &Path, project_path: &Path) -> Result<(), Error> {
     let args = ["check", "--drafts", "--skip-external-links"];
     spawn_log(theme_dir, project_path, args)?;

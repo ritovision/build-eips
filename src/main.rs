@@ -25,6 +25,7 @@ mod print;
 mod progress;
 mod proposal;
 mod serve;
+mod tree_sync;
 mod workspace;
 mod zola;
 

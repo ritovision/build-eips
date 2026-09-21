@@ -600,7 +600,15 @@ pub fn sync_working_tree_paths(
     destination_root: &Path,
     relative_paths: &BTreeSet<PathBuf>,
 ) -> Result<(), Error> {
-    for path in relative_paths {
+    let plan = crate::tree_sync::Plan::new(source_root, destination_root, relative_paths)
+        .with_context(|_| IoSnafu {
+            path: destination_root,
+        })?;
+    plan.prepare_destination(destination_root)
+        .with_context(|_| IoSnafu {
+            path: destination_root,
+        })?;
+    for path in &plan.files {
         sync_working_tree_path(source_root, destination_root, path)?;
     }
 
@@ -641,9 +649,7 @@ pub fn sync_materialized_paths(
         what: "open build repository index",
     })?;
 
-    for path in relative_paths {
-        sync_dirty_path(source_root, working_root, &mut index, path)?;
-    }
+    sync_dirty_paths(source_root, working_root, &mut index, relative_paths)?;
 
     index.write().context(GitSnafu {
         what: "write build repository index",
@@ -773,70 +779,28 @@ fn copy_symlink(_source: &Path, _destination: &Path) -> Result<(), std::io::Erro
     ))
 }
 
-fn sync_dirty_path(
+fn sync_dirty_paths(
     source_root: &Path,
     working_root: &Path,
     index: &mut git2::Index,
-    relative_path: &Path,
+    relative_paths: &BTreeSet<PathBuf>,
 ) -> Result<(), Error> {
-    crate::generated_fs::check_path(source_root, &source_root.join(relative_path), true)
-        .with_context(|_| IoSnafu {
-            path: source_root.join(relative_path),
-        })?;
-    crate::generated_fs::check_path(working_root, &working_root.join(relative_path), true)
-        .with_context(|_| IoSnafu {
-            path: working_root.join(relative_path),
-        })?;
-    let source_path = source_root.join(relative_path);
-    let working_path = working_root.join(relative_path);
-
-    match std::fs::symlink_metadata(&source_path) {
-        Ok(metadata) if metadata.file_type().is_dir() && !metadata.file_type().is_symlink() => {
-            remove_existing_path(&working_path).with_context(|_| IoSnafu {
-                path: working_path.clone(),
-            })?;
-            remove_index_path(index, relative_path)?;
-            Ok(())
-        }
-        Ok(metadata) if metadata.file_type().is_file() || metadata.file_type().is_symlink() => {
-            if let Some(parent) = working_path.parent() {
-                std::fs::create_dir_all(parent).with_context(|_| IoSnafu {
-                    path: parent.to_path_buf(),
-                })?;
-            }
-
-            remove_existing_path(&working_path).with_context(|_| IoSnafu {
-                path: working_path.clone(),
-            })?;
-
-            if metadata.file_type().is_symlink() {
-                copy_symlink(&source_path, &working_path).with_context(|_| IoSnafu {
-                    path: working_path.clone(),
-                })?;
-            } else {
-                std::fs::copy(&source_path, &working_path).with_context(|_| IoSnafu {
-                    path: source_path.clone(),
-                })?;
-            }
-
-            index.add_path(relative_path).context(GitSnafu {
-                what: "add dirty path to index",
-            })?;
-            Ok(())
-        }
-        Ok(_) => DirtyUnsupportedPathSnafu {
-            path: relative_path.to_path_buf(),
-        }
-        .fail(),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            remove_existing_path(&working_path).with_context(|_| IoSnafu {
-                path: working_path.clone(),
-            })?;
-            remove_index_path(index, relative_path)?;
-            Ok(())
-        }
-        Err(error) => Err(IoSnafu { path: source_path }.into_error(error)),
+    let plan = crate::tree_sync::Plan::new(source_root, working_root, relative_paths)
+        .with_context(|_| IoSnafu { path: working_root })?;
+    plan.prepare_destination(working_root)
+        .with_context(|_| IoSnafu { path: working_root })?;
+    // Remove old tree entries before inserting replacements. A directory/file
+    // exchange is one transition, not contradictory sequential path operations.
+    for path in relative_paths {
+        remove_index_path(index, path)?;
     }
+    for path in &plan.files {
+        sync_working_tree_path(source_root, working_root, path)?;
+        index.add_path(path).context(GitSnafu {
+            what: "add materialized path to index",
+        })?;
+    }
+    Ok(())
 }
 
 fn sync_working_tree_path(
@@ -925,9 +889,7 @@ fn materialize_dirty_tree(
         what: "open build repository index",
     })?;
 
-    for path in dirty_paths {
-        sync_dirty_path(source_root, working_root, &mut index, &path)?;
-    }
+    sync_dirty_paths(source_root, working_root, &mut index, &dirty_paths)?;
 
     index.write().context(GitSnafu {
         what: "write build repository index",
