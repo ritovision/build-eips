@@ -106,6 +106,16 @@ fn path_is_watched_source_path(root_path: &Path, path: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn read_only_event(event: &Event) -> bool {
+    matches!(event.kind, notify::EventKind::Access(_))
+        && !matches!(
+            event.kind,
+            notify::EventKind::Access(notify::event::AccessKind::Close(
+                notify::event::AccessMode::Write
+            ))
+        )
+}
+
 fn index_lock_path(index_path: &Path) -> Option<PathBuf> {
     let file_name = index_path.file_name()?.to_string_lossy();
     Some(index_path.with_file_name(format!("{file_name}.lock")))
@@ -141,7 +151,7 @@ impl GitWatchPaths {
     }
 
     fn has_event(&self, source: &Path, excluded: Option<&Path>, event: &Event) -> bool {
-        if matches!(event.kind, notify::EventKind::Access(_)) {
+        if read_only_event(event) {
             return false;
         }
         event.paths.iter().any(|path| {
@@ -330,7 +340,7 @@ fn dirty_serve_sync_loop(
     };
 
     let mut theme_state = match &sync_config.local_theme {
-        Some(config) => match LiveTheme::new(config.clone()) {
+        Some(config) => match LiveTheme::new(config.clone(), sync_config.configuration.clone()) {
             Ok(state) => Some(state),
             Err(error) => {
                 let _ = ready_tx.send(Err(format!(
@@ -357,6 +367,7 @@ fn dirty_serve_sync_loop(
     }
     let _ = ready_tx.send(Ok(()));
 
+    let mut retry_at = Instant::now();
     while !stop.load(Ordering::Relaxed) {
         let first_event = match event_rx.recv_timeout(Duration::from_millis(250)) {
             Ok(event) => Some(event),
@@ -364,19 +375,22 @@ fn dirty_serve_sync_loop(
             Err(RecvTimeoutError::Disconnected) => break,
         };
 
-        let retry_active = active_state
-            .as_ref()
-            .is_some_and(LiveSource::needs_publication_retry);
-        let retry_theme = theme_state
-            .as_ref()
-            .is_some_and(LiveTheme::needs_publication_retry);
+        let retry_due = Instant::now() >= retry_at;
+        let retry_active = retry_due
+            && active_state
+                .as_ref()
+                .is_some_and(LiveSource::needs_publication_retry);
+        let retry_theme = retry_due
+            && theme_state
+                .as_ref()
+                .is_some_and(LiveTheme::needs_publication_retry);
         if first_event.is_none() && !retry_active && !retry_theme {
             continue;
         }
         let mut saw_active_event = retry_active;
         let mut saw_theme_event = retry_theme;
         let mut classify = |event: &Event| {
-            if matches!(event.kind, notify::EventKind::Access(_)) {
+            if read_only_event(event) {
                 return;
             }
             let configuration_changed = sync_config
@@ -416,6 +430,9 @@ fn dirty_serve_sync_loop(
             }
         }
 
+        if saw_active_event || saw_theme_event {
+            retry_at = Instant::now() + Duration::from_secs(1);
+        }
         if (saw_active_event || saw_theme_event) && sync_config.configuration.verify().is_err() {
             warn!("resolved configuration changed or became unavailable; restart serve. Last-good input retained");
             continue;
@@ -598,11 +615,14 @@ mod tests {
             ],
         );
         git::materialize_working_tree(&theme_root, &mounted_theme_dir).unwrap();
-        let mut state = crate::theme_live::LiveTheme::new(LocalThemeServeSync {
-            owned_root: temp.path().join("build/repo"),
-            theme_source_root: theme_root.clone(),
-            mounted_theme_dir: mounted_theme_dir.clone(),
-        })
+        let mut state = crate::theme_live::LiveTheme::new(
+            LocalThemeServeSync {
+                owned_root: temp.path().join("build/repo"),
+                theme_source_root: theme_root.clone(),
+                mounted_theme_dir: mounted_theme_dir.clone(),
+            },
+            Default::default(),
+        )
         .unwrap();
         write_file(&theme_root, "templates/index.html", "dirty local theme\n");
         state.synchronize().unwrap();
@@ -982,5 +1002,14 @@ mod live_generation_regressions {
         let read = Event::new(notify::EventKind::Access(notify::event::AccessKind::Read))
             .add_path(f.source.join("content/00001.md"));
         assert!(!paths.has_event(&active.source_root, active.build_repo_path.parent(), &read));
+        let closed = Event::new(notify::EventKind::Access(notify::event::AccessKind::Close(
+            notify::event::AccessMode::Write,
+        )))
+        .add_path(f.source.join("content/00001.md"));
+        assert!(paths.has_event(
+            &active.source_root,
+            active.build_repo_path.parent(),
+            &closed
+        ));
     }
 }

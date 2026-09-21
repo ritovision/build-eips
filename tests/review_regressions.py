@@ -245,6 +245,20 @@ def r06():
         finally:stopserver(proc,f)
 
 
+def theme_config_gate():
+    w,r,t=fixture('clean-theme-config-provenance');proc,f,port=startserver(w,r,flags=('--clean',))
+    try:
+        initial=http(port,'/1/')[1];config=w/'.build-eips.toml';original=config.read_text()
+        write(config,original+'\n# deliberately changed during serve\n')
+        write(t/'templates/eip.html','<html>AFTER_CONFIG {{ page.content | safe }}</html>')
+        eventually(lambda:'restart serve' in (w/'serve.log').read_text(),w,'clean-source theme configuration change not diagnosed')
+        assert http(port,'/1/')[1]==initial
+        write(config,original)
+        eventually(lambda:'AFTER_CONFIG' in http(port,'/1/')[1],w,'restored clean-source configuration did not recover theme')
+        record('R03-R05-clean-source-theme-config-gate',w)
+    finally:stopserver(proc,f)
+
+
 if __name__=='__main__':
     if os.name!='posix':raise SystemExit('Native Windows acceptance is separate from this POSIX process harness.')
     parser=argparse.ArgumentParser();parser.add_argument('--build-eips',type=Path,required=True);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--cases',nargs='+',default=['r01'])

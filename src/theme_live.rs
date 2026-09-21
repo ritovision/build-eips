@@ -18,6 +18,7 @@ pub(crate) struct LiveTheme {
     scratch: tempfile::TempDir,
     stage: PathBuf,
     config: LocalThemeServeSync,
+    configuration: crate::execution::ConfigurationSnapshot,
     previous: Option<Snapshot>,
     previous_paths: BTreeSet<PathBuf>,
     pending: BTreeSet<PathBuf>,
@@ -25,7 +26,10 @@ pub(crate) struct LiveTheme {
 }
 
 impl LiveTheme {
-    pub(crate) fn new(config: LocalThemeServeSync) -> Result<Self, Whatever> {
+    pub(crate) fn new(
+        config: LocalThemeServeSync,
+        configuration: crate::execution::ConfigurationSnapshot,
+    ) -> Result<Self, Whatever> {
         crate::generated_fs::check_path(&config.owned_root, &config.mounted_theme_dir, false)
             .whatever_context("unsafe theme mount")?;
         let scratch = tempfile::Builder::new()
@@ -58,6 +62,7 @@ impl LiveTheme {
             scratch,
             stage,
             config,
+            configuration,
             previous: None,
             previous_paths,
             pending: BTreeSet::new(),
@@ -72,6 +77,7 @@ impl LiveTheme {
     }
 
     pub(crate) fn synchronize(&mut self) -> Result<usize, Whatever> {
+        self.configuration.verify()?;
         let source = &self.config.theme_source_root;
         let snapshot = Snapshot::capture(source, false)?;
         let mut affected = self.pending.clone();
@@ -115,6 +121,7 @@ impl LiveTheme {
             false,
         )
         .whatever_context("unsafe theme mount")?;
+        self.configuration.verify()?;
         self.publication_uncertain = true;
         let output = crate::layout::output_path(self.config.owned_root.parent().unwrap());
         let refresh = crate::zola::prepare_static_output(&self.stage, &output, &affected)
