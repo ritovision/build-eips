@@ -928,34 +928,161 @@ fn materialize_dirty_tree(
     Ok(dirty_head)
 }
 
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EntryIdentity {
+    pub(crate) id: Oid,
+    pub(crate) mode: i32,
+    pub(crate) kind: Option<ObjectType>,
+}
+
+pub(crate) fn check_entry_conflict(
+    path: &Path,
+    left: EntryIdentity,
+    right: EntryIdentity,
+) -> Result<(), Error> {
+    for (equal, field) in [
+        (left.mode == right.mode, "filemode"),
+        (left.kind == right.kind, "kind"),
+        (left.id == right.id, "id"),
+    ] {
+        ensure!(
+            equal,
+            UpdateTreeSnafu {
+                msg: format!("conflicting path `{}` ({field})", path.display())
+            }
+        );
+    }
+    Ok(())
+}
+
+fn filemode(metadata: &std::fs::Metadata, previous: Option<u32>, trust_mode: bool) -> i32 {
+    if metadata.file_type().is_symlink() {
+        return 0o120000;
+    }
+    if metadata.is_dir() {
+        return 0o040000;
+    }
+    if !trust_mode {
+        return if previous == Some(0o100755) {
+            0o100755
+        } else {
+            0o100644
+        };
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if metadata.permissions().mode() & 0o100 != 0 {
+            return 0o100755;
+        }
+    }
+    0o100644
+}
+
+pub(crate) fn working_entry_identity(
+    repo: &git2::Repository,
+    source: &Path,
+    relative: &Path,
+) -> Result<Option<EntryIdentity>, Error> {
+    let path = source.join(relative);
+    crate::generated_fs::check_path(source, &path, true)
+        .with_context(|_| IoSnafu { path: &path })?;
+    let meta = match std::fs::symlink_metadata(&path) {
+        Ok(meta) => meta,
+        Err(e) if matches!(e.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
+            return Ok(None)
+        }
+        Err(e) => return Err(IoSnafu { path }.into_error(e)),
+    };
+    let previous = repo
+        .index()
+        .context(GitSnafu {
+            what: "read mode normalization index",
+        })?
+        .get_path(relative, 0)
+        .map(|e| e.mode);
+    let trust_mode = repo
+        .config()
+        .context(GitSnafu {
+            what: "read mode normalization policy",
+        })?
+        .get_bool("core.filemode")
+        .unwrap_or(cfg!(unix));
+    let mode = filemode(&meta, previous, trust_mode);
+    if meta.is_dir() && !meta.file_type().is_symlink() {
+        return Ok(Some(EntryIdentity {
+            id: Oid::zero(),
+            mode,
+            kind: Some(ObjectType::Tree),
+        }));
+    }
+    let bytes = if meta.file_type().is_symlink() {
+        std::fs::read_link(&path)
+            .with_context(|_| IoSnafu { path: &path })?
+            .as_os_str()
+            .as_encoded_bytes()
+            .to_vec()
+    } else if meta.is_file() {
+        std::fs::read(&path).with_context(|_| IoSnafu { path: &path })?
+    } else {
+        return DirtyUnsupportedPathSnafu {
+            path: relative.to_path_buf(),
+        }
+        .fail();
+    };
+    let id = Oid::hash_object(ObjectType::Blob, &bytes).context(GitSnafu {
+        what: "hash source entry",
+    })?;
+    Ok(Some(EntryIdentity {
+        id,
+        mode,
+        kind: Some(ObjectType::Blob),
+    }))
+}
+
 fn check_conflict(master_tree: &Tree, path: &Path, entry: &TreeEntry) -> Result<(), Error> {
     let original = match master_tree.get_path(path) {
-        Err(_) => return Ok(()),
+        Err(_) => {
+            for parent in path
+                .ancestors()
+                .skip(1)
+                .filter(|p| !p.as_os_str().is_empty())
+            {
+                if let Ok(original) = master_tree.get_path(parent) {
+                    if original.kind() != Some(ObjectType::Tree) {
+                        check_entry_conflict(
+                            parent,
+                            EntryIdentity {
+                                id: original.id(),
+                                mode: original.filemode(),
+                                kind: original.kind(),
+                            },
+                            EntryIdentity {
+                                id: Oid::zero(),
+                                mode: 0o040000,
+                                kind: Some(ObjectType::Tree),
+                            },
+                        )?;
+                    }
+                }
+            }
+            return Ok(());
+        }
         Ok(o) => o,
     };
-
-    ensure!(
-        original.filemode() == entry.filemode(),
-        UpdateTreeSnafu {
-            msg: format!("conflicting path `{}` (filemode)", path.to_string_lossy()),
-        }
-    );
-
-    ensure!(
-        original.kind() == entry.kind(),
-        UpdateTreeSnafu {
-            msg: format!("conflicting path `{}` (kind)", path.to_string_lossy()),
-        }
-    );
-
-    ensure!(
-        original.id() == entry.id(),
-        UpdateTreeSnafu {
-            msg: format!("conflicting path `{}` (id)", path.to_string_lossy()),
-        }
-    );
-
-    Ok(())
+    check_entry_conflict(
+        path,
+        EntryIdentity {
+            id: original.id(),
+            mode: original.filemode(),
+            kind: original.kind(),
+        },
+        EntryIdentity {
+            id: entry.id(),
+            mode: entry.filemode(),
+            kind: entry.kind(),
+        },
+    )
 }
 
 pub struct Fresh {
@@ -1301,7 +1428,12 @@ fn merge_sibling_repositories(
             }
 
             debug!("upsert `{path}`");
-            tree_builder.upsert(path, b.id(), FileMode::Blob);
+            let mode = match b.filemode() {
+                0o120000 => FileMode::Link,
+                0o100755 => FileMode::BlobExecutable,
+                _ => FileMode::Blob,
+            };
+            tree_builder.upsert(path, b.id(), mode);
             TreeWalkResult::Ok
         });
 

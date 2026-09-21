@@ -237,31 +237,39 @@ impl LiveSource {
         let mut to_copy = affected.clone();
         for path in &affected {
             if let Some((expected_id, expected_mode)) = self.sibling_files.get(path) {
-                let source_path = self.source.join(path);
-                if source_path.exists() {
-                    let meta = std::fs::symlink_metadata(&source_path)
-                        .whatever_context("unable to inspect source/sibling overlap")?;
-                    let bytes = if meta.file_type().is_symlink() {
-                        std::fs::read_link(&source_path)
-                            .whatever_context("unable to read source link")?
-                            .to_string_lossy()
-                            .as_bytes()
-                            .to_vec()
-                    } else {
-                        std::fs::read(&source_path)
-                            .whatever_context("unable to compare source/sibling overlap")?
-                    };
-                    let actual_id = Oid::hash_object(ObjectType::Blob, &bytes)
-                        .whatever_context("unable to compare source blob")?;
-                    if actual_id != *expected_id
-                        || (meta.file_type().is_symlink() != (*expected_mode == 0o120000))
-                    {
-                        snafu::whatever!("active change conflicts with startup sibling snapshot at `{}`; last-good input retained", path.display());
-                    }
+                if let Some(actual) = git::working_entry_identity(&repo, &self.source, path)
+                    .whatever_context("unable to inspect source/sibling overlap")?
+                {
+                    git::check_entry_conflict(path, actual, git::EntryIdentity {
+                        id: *expected_id, mode: *expected_mode, kind: Some(ObjectType::Blob),
+                    }).whatever_context("active change conflicts with startup sibling snapshot; last-good input retained")?;
                 }
                 // An identical active copy, or its deletion, cannot remove the
                 // authoritative sibling contribution from the merged snapshot.
                 to_copy.remove(path);
+            } else {
+                // A newly introduced active descendant/ancestor must not replace
+                // a sibling's file with a directory (or erase its directory).
+                let overlapping = path
+                    .ancestors()
+                    .skip(1)
+                    .any(|p| self.sibling_files.contains_key(p))
+                    || self
+                        .sibling_files
+                        .range(path.clone()..)
+                        .next()
+                        .is_some_and(|(p, _)| p.starts_with(path));
+                if overlapping {
+                    if let Some(actual) = git::working_entry_identity(&repo, &self.source, path)
+                        .whatever_context("unable to inspect source/sibling tree-shape overlap")?
+                    {
+                        if actual.kind == Some(ObjectType::Blob) {
+                            git::check_entry_conflict(path, actual, git::EntryIdentity {
+                                id: Oid::zero(), mode: 0o040000, kind: Some(ObjectType::Tree),
+                            }).whatever_context("active change conflicts with startup sibling snapshot; last-good input retained")?;
+                        }
+                    }
+                }
             }
         }
         // A formerly staged addition can become untracked again while its

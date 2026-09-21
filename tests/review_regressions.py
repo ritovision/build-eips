@@ -110,6 +110,52 @@ def r02():
     finally:stopserver(proc,f)
 
 
+def r04():
+    for kind in ('bytes','executable','link'):
+        w,r,t=fixture('sibling-'+kind);sib=w/'ERCs'
+        write(r/'content/shared.txt','IDENTICAL');commit(r)
+        write(sib/'content/shared.txt','IDENTICAL');write(sib/'Build.toml',manifest(sib,'ERCs',t,git(t,'rev-parse','HEAD')));initgit(sib)
+        write(r/'Build.toml',manifest(r,'EIPs',t,git(t,'rev-parse','HEAD'),{'ERCs':sib}));commit(r)
+        proc,f,port=startserver(w,r)
+        try:
+            path=r/'content/shared.txt'
+            if kind=='bytes':write(path,'DIFFERENT')
+            elif kind=='executable':path.chmod(0o755)
+            else:path.unlink();path.symlink_to('00001.md')
+            eventually(lambda:'conflicts with startup sibling snapshot' in (w/'serve.log').read_text(),w,'live conflict not rejected')
+            result=cmd([BIN,'-C',r,'--build-root',w/'fresh-conflict','build'],check=False)
+            assert result.returncode!=0 and 'conflicting path' in result.stdout,result.stdout
+            assert (w/'generated/repo/content/shared.txt').read_text()=='IDENTICAL'
+            git(r,'restore','content/shared.txt')
+            write(r/'content/00001.md',md(1,'AFTER CONFLICT'))
+            eventually(lambda:'AFTER CONFLICT' in http(port,'/1/')[1],w,'live conflict did not recover')
+            path.unlink();write(r/'content/00001.md',md(1,'AFTER DELETION'))
+            eventually(lambda:'AFTER DELETION' in http(port,'/1/')[1],w,'deleting identical active copy failed')
+            assert (w/'generated/repo/content/shared.txt').read_text()=='IDENTICAL'
+            result=cmd([BIN,'-C',r,'--build-root',w/'fresh-deletion','build'],check=False);assert result.returncode==0,result.stdout
+            record('R04-fresh-live-'+kind,w)
+        finally:stopserver(proc,f)
+
+
+def r04_shapes():
+    for direction in ('active-parent','active-child'):
+        w,r,t=fixture('sibling-shape-'+direction);sib=w/'ERCs'
+        sibling_path='content/00002/assets/child.txt' if direction=='active-parent' else 'content/shared'
+        active_path='content/00002' if direction=='active-parent' else 'content/shared/child.txt'
+        if direction=='active-parent':write(sib/'content/00002/index.md',md(2))
+        write(sib/sibling_path,'SIBLING CONTENT');write(sib/'Build.toml',manifest(sib,'ERCs',t,git(t,'rev-parse','HEAD')));initgit(sib)
+        write(r/'Build.toml',manifest(r,'EIPs',t,git(t,'rev-parse','HEAD'),{'ERCs':sib}));commit(r)
+        proc,f,port=startserver(w,r)
+        try:
+            write(r/active_path,'ACTIVE CONTENT');git(r,'add',active_path)
+            eventually(lambda:'conflicts with startup sibling snapshot' in (w/'serve.log').read_text(),w,'hierarchical sibling overlap admitted')
+            result=cmd([BIN,'-C',r,'--build-root',w/'fresh-conflict','build'],check=False)
+            assert result.returncode!=0 and 'conflicting path' in result.stdout,result.stdout
+            assert (w/'generated/repo'/sibling_path).read_text()=='SIBLING CONTENT'
+            record('R04-'+direction+'-overlap',w)
+        finally:stopserver(proc,f)
+
+
 if __name__=='__main__':
     if os.name!='posix':raise SystemExit('Native Windows acceptance is separate from this POSIX process harness.')
     parser=argparse.ArgumentParser();parser.add_argument('--build-eips',type=Path,required=True);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--cases',nargs='+',default=['r01'])
