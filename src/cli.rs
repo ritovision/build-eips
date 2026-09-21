@@ -387,7 +387,7 @@ impl EditorialSelectorArgs {
 mod tests {
     use clap::Parser;
 
-    use crate::proposal::ProposalNumber;
+    use crate::{config::SearchCorpusFormat, proposal::ProposalNumber};
 
     use super::{Args, EditorialCommand, Operation, RuntimeOperation};
 

@@ -1006,6 +1006,7 @@ mod live_generation_regressions {
             source_root: f.source.clone(),
             build_repo_path: f.build.clone(),
             only_plan: None,
+            network_upgrade_index: None,
             source_generation: Some(f.generation),
         };
         let index = Event::new(notify::EventKind::Any).add_path(paths.index.clone());

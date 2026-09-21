@@ -752,7 +752,7 @@ mod workspace_tests {
     use super::{
         default_workspace_config_text, discover_path, LoadedWorkspaceConfig, SearchCorpusFormat,
         ServerBinding, ServerSettings, WorkspaceError, DEFAULT_SERVER_INTERFACE,
-        DEFAULT_SERVER_PORT, DEFAULT_SITE_BASE_URL, LOCAL_CONFIG_FILE,
+        DEFAULT_SERVER_PORT, LOCAL_CONFIG_FILE,
     };
     use crate::proposal::ProposalNumber;
 

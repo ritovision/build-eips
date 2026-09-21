@@ -643,10 +643,21 @@ mod tests {
         for command in [&["build"][..], &["check"][..], &["serve"][..]] {
             let workspace = runtime_workspace(false);
             let resolved = resolved_runtime(&workspace, command);
-            let prepared = Prepared::prepare(resolved).unwrap();
+            std::fs::create_dir_all(&resolved.build_path).unwrap();
+            let repo_path = resolved.build_path.join(REPO_DIR);
+
+            prepare_runtime_source(
+                &resolved.root_path,
+                &repo_path,
+                &resolved.repository_use,
+                resolved.source_materialization,
+            )
+            .unwrap();
+            let (theme_path, _) =
+                prepare_theme_for_zola(resolved.theme_path.clone().unwrap(), &repo_path).unwrap();
 
             assert_eq!(
-                std::fs::read_to_string(prepared.theme_path.join("templates/index.html")).unwrap(),
+                std::fs::read_to_string(theme_path.join("templates/index.html")).unwrap(),
                 "workspace local theme\n"
             );
         }
@@ -776,7 +787,7 @@ mod tests {
         let _active_repo = init_repo(
             &active_path,
             &[
-                (config::REPO_MANIFEST_FILE, manifest.as_str()),
+                (config::MANIFEST_FILE, manifest.as_str()),
                 ("content/00001.md", active_markdown.as_str()),
             ],
         );
@@ -820,7 +831,7 @@ mod tests {
         let _active_repo = init_repo(
             &active_path,
             &[
-                (config::REPO_MANIFEST_FILE, manifest.as_str()),
+                (config::MANIFEST_FILE, manifest.as_str()),
                 ("content/07773.md", meta_markdown.as_str()),
             ],
         );
@@ -880,7 +891,7 @@ mod tests {
         write_file(&workspace_root, config::LOCAL_CONFIG_FILE, "");
         std::fs::create_dir_all(workspace_root.join(config::DEFAULT_THEME_DIR)).unwrap();
         let mut active_files = vec![
-            (config::REPO_MANIFEST_FILE.to_owned(), manifest),
+            (config::MANIFEST_FILE.to_owned(), manifest),
             ("content/07773.md".to_owned(), glamsterdam),
             ("content/08081.md".to_owned(), hegota),
             ("content/07569.md".to_owned(), dencun),
