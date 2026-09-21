@@ -628,6 +628,14 @@ fn sync_dirty_path(
     index: &mut git2::Index,
     relative_path: &Path,
 ) -> Result<(), Error> {
+    crate::generated_fs::check_path(source_root, &source_root.join(relative_path), true)
+        .with_context(|_| IoSnafu {
+            path: source_root.join(relative_path),
+        })?;
+    crate::generated_fs::check_path(working_root, &working_root.join(relative_path), true)
+        .with_context(|_| IoSnafu {
+            path: working_root.join(relative_path),
+        })?;
     let source_path = source_root.join(relative_path);
     let working_path = working_root.join(relative_path);
 
@@ -685,6 +693,18 @@ fn sync_working_tree_path(
     destination_root: &Path,
     relative_path: &Path,
 ) -> Result<(), Error> {
+    crate::generated_fs::check_path(source_root, &source_root.join(relative_path), true)
+        .with_context(|_| IoSnafu {
+            path: source_root.join(relative_path),
+        })?;
+    crate::generated_fs::check_path(
+        destination_root,
+        &destination_root.join(relative_path),
+        true,
+    )
+    .with_context(|_| IoSnafu {
+        path: destination_root.join(relative_path),
+    })?;
     let source_path = source_root.join(relative_path);
     let destination_path = destination_root.join(relative_path);
 
@@ -854,6 +874,25 @@ impl Fresh {
 
         debug!("source repository at `{src_repo_url}`");
 
+        crate::generated_fs::check_source_destination(&root_path, repo_path).with_context(
+            |_| IoSnafu {
+                path: repo_path.to_path_buf(),
+            },
+        )?;
+        crate::generated_fs::check_path(repo_path, &repo_path.join(".git"), false).with_context(
+            |_| IoSnafu {
+                path: repo_path.to_path_buf(),
+            },
+        )?;
+        if repo_path.join(".git").is_file() {
+            return Err(IoSnafu {
+                path: repo_path.to_path_buf(),
+            }
+            .into_error(std::io::Error::new(
+                ErrorKind::InvalidInput,
+                "generated repository cannot use an external gitdir/worktree pointer",
+            )));
+        }
         let working_repo = open_or_init(repo_path)?;
 
         Ok(Self {

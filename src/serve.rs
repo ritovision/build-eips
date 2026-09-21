@@ -40,6 +40,7 @@ struct ActiveRepoServeSync {
 
 #[derive(Debug, Clone)]
 pub(crate) struct LocalThemeServeSync {
+    pub(crate) owned_root: PathBuf,
     pub(crate) theme_source_root: PathBuf,
     pub(crate) mounted_theme_dir: PathBuf,
     pub(crate) theme_index_path: PathBuf,
@@ -360,6 +361,14 @@ fn dirty_serve_sync_loop(
 
     let mut previous_theme_dirty_paths: BTreeSet<_> = match &sync_config.local_theme {
         Some(local_theme) => {
+            if let Err(error) = crate::generated_fs::check_path(
+                &local_theme.owned_root,
+                &local_theme.mounted_theme_dir,
+                true,
+            ) {
+                let _ = ready_tx.send(Err(format!("unsafe theme mount: {error}")));
+                return;
+            }
             if let Err(error) = git::materialize_working_tree(
                 &local_theme.theme_source_root,
                 &local_theme.mounted_theme_dir,
@@ -470,6 +479,14 @@ fn dirty_serve_sync_loop(
 
         if saw_theme_event {
             if let Some(local_theme) = &sync_config.local_theme {
+                if let Err(error) = crate::generated_fs::check_path(
+                    &local_theme.owned_root,
+                    &local_theme.mounted_theme_dir,
+                    false,
+                ) {
+                    warn!("unsafe theme mount: {error}");
+                    continue;
+                }
                 if let Err(error) = sync_theme_serve_state(
                     &local_theme.theme_source_root,
                     &local_theme.mounted_theme_dir,
@@ -528,6 +545,7 @@ mod tests {
 
     fn fake_theme_sync(root: &Path) -> LocalThemeServeSync {
         LocalThemeServeSync {
+            owned_root: root.join("repo"),
             theme_source_root: root.join("theme"),
             mounted_theme_dir: root.join("repo/themes/eips-theme"),
             theme_index_path: root.join("theme/.git/index"),

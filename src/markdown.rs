@@ -221,15 +221,24 @@ fn last_modified(p: &Path) -> Result<Datetime, Whatever> {
     Ok(date_time.to_rfc3339().parse().unwrap())
 }
 
-fn write_file(path: &Path, front_matter: FrontMatter, body: &str) -> std::io::Result<()> {
-    let mut output = std::fs::OpenOptions::new()
-        .truncate(true)
-        .write(true)
-        .open(path)?;
+fn write_file(
+    root: &Path,
+    path: &Path,
+    front_matter: FrontMatter,
+    body: &str,
+) -> std::io::Result<()> {
+    crate::generated_fs::check_path(root, path, false)?;
+    // Replace rather than truncate: even an externally hard-linked old file is
+    // not modified in place. Proposal links are rejected before reading below.
+    let permissions = std::fs::metadata(path)?.permissions();
+    let mut output = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
+    output.as_file().set_permissions(permissions)?;
     writeln!(output, "+++")?;
     writeln!(output, "{}", toml::to_string(&front_matter).unwrap())?;
     writeln!(output, "+++")?;
     writeln!(output, "{}", body)?;
+    crate::generated_fs::check_path(root, path, false)?;
+    output.persist(path).map_err(|error| error.error)?;
     Ok(())
 }
 
@@ -727,6 +736,8 @@ fn is_generated_zola_markdown(contents: &str) -> bool {
 }
 
 pub fn preprocess(root_path: &Path, only_plan: Option<&OnlyRenderPlan>) -> Result<(), Whatever> {
+    crate::generated_fs::check_path(root_path, root_path, false)
+        .whatever_context("unsafe content root")?;
     let dir = std::fs::read_dir(root_path).with_whatever_context(|_| {
         format!("could not read directory `{}`", root_path.to_string_lossy())
     })?;
@@ -1318,7 +1329,7 @@ fn process_assets(
             ..Default::default()
         };
 
-        match write_file(path, front_matter, &contents) {
+        match write_file(root, path, front_matter, &contents) {
             Ok(()) => {}
             Err(error) if missing_path_mode.should_ignore_io_error(&error) => continue,
             Err(error) => return Err(error).whatever_context("couldn't write file"),
@@ -1334,6 +1345,8 @@ fn process_eip(
     only_plan: Option<&OnlyRenderPlan>,
     missing_path_mode: MissingPathMode,
 ) -> Result<(), Whatever> {
+    crate::generated_fs::check_path(root, path, false)
+        .whatever_context("proposal markdown must be an owned regular path, not a link")?;
     let path_lossy = path.to_string_lossy();
     let contents = match read_to_string(path) {
         Ok(contents) => contents,
@@ -1471,7 +1484,7 @@ fn process_eip(
         }
     }
 
-    match write_file(path, front_matter, &body) {
+    match write_file(root, path, front_matter, &body) {
         Ok(()) => {}
         Err(error) if missing_path_mode.should_ignore_io_error(&error) => return Ok(()),
         Err(error) => return Err(error).whatever_context("couldn't write file"),
@@ -2500,5 +2513,35 @@ mod tests {
 
         assert!(error.contains("could not canonicalize"));
         assert!(error.contains("00678.md"));
+    }
+}
+
+#[cfg(all(test, unix))]
+mod containment_regressions {
+    use super::*;
+    #[test]
+    fn proposal_link_cannot_rewrite_external_markdown() {
+        let temp = tempfile::tempdir().unwrap();
+        let content = temp.path().join("content");
+        std::fs::create_dir(&content).unwrap();
+        let victim = temp.path().join("victim.md");
+        let original = "---\neip: 1\ntitle: Sentinel\n---\nEXTERNAL\n";
+        std::fs::write(&victim, original).unwrap();
+        std::os::unix::fs::symlink(&victim, content.join("00001.md")).unwrap();
+        assert!(preprocess(&content, None).is_err());
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), original);
+    }
+    #[test]
+    fn transformed_file_replacement_does_not_modify_hardlink_target() {
+        let temp = tempfile::tempdir().unwrap();
+        let content = temp.path().join("content");
+        std::fs::create_dir(&content).unwrap();
+        let victim = temp.path().join("victim.md");
+        std::fs::write(&victim, "EXTERNAL").unwrap();
+        let path = content.join("file.md");
+        std::fs::hard_link(&victim, &path).unwrap();
+        write_file(&content, &path, FrontMatter::default(), "GENERATED").unwrap();
+        assert_eq!(std::fs::read_to_string(&victim).unwrap(), "EXTERNAL");
+        assert!(std::fs::read_to_string(path).unwrap().contains("GENERATED"));
     }
 }

@@ -55,6 +55,7 @@ fn force_symlink_dir(original: &Path, link: &Path) -> Result<(), std::io::Error>
 
 fn mount_theme(theme_dir: &Path, project_path: &Path) -> Result<PathBuf, std::io::Error> {
     let mounted_theme_path = mounted_theme_path(project_path);
+    crate::generated_fs::check_path(project_path, &mounted_theme_path, true)?;
     if theme_dir == mounted_theme_path {
         return Ok(mounted_theme_path);
     }

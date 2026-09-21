@@ -51,8 +51,7 @@ citationberg = { version = "0.6.1", features = ["json"] }
 hayagriva = { version = "0.9.1", features = ["archive", "csl-json"], default-features = false }
 iref = "3.2.2"
 
+tempfile = "3.23.0"
+
 [features]
 backtrace = [ "snafu/backtrace", "eipw-lint/backtrace" ]
-
-[dev-dependencies]
-tempfile = "3.23.0"

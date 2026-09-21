@@ -11,6 +11,7 @@ mod context;
 mod editorial;
 mod execution;
 mod find_root;
+mod generated_fs;
 mod git;
 mod github;
 mod layout;
@@ -46,6 +47,8 @@ use crate::{
 
 fn lock(build_path: &Path) -> Result<LockFile, Whatever> {
     let lock_path = build_path.join(".lock");
+    generated_fs::check_path(build_path, &lock_path, false)
+        .whatever_context("unsafe build lock path")?;
     let mut lock_file =
         fslock::LockFile::open(&lock_path).whatever_context("unable to open lock file")?;
     let locked = lock_file
@@ -106,6 +109,8 @@ fn run() -> Result<(), Whatever> {
         return Ok(());
     }
 
+    generated_fs::validate_build_root(&resolved)
+        .whatever_context("unsafe build-root/source overlap or generated path")?;
     let build_path = make_build_dir(&resolved.build_path)?;
     let mut lock_file = lock(&build_path)?;
 

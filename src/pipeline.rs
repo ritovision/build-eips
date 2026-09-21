@@ -27,6 +27,8 @@ fn prepare_theme_for_zola(
     repo_path: &Path,
 ) -> Result<(PathBuf, LocalThemeServeSync), Whatever> {
     let mounted_theme_dir = mounted_theme_path(repo_path);
+    crate::generated_fs::check_path(repo_path, &mounted_theme_dir, true)
+        .whatever_context("unsafe theme mount destination")?;
     git::materialize_working_tree(&theme_path, &mounted_theme_dir)
         .whatever_context("unable to materialize workspace-local theme")?;
     let theme_index_path = git::index_path(&theme_path)
@@ -35,6 +37,7 @@ fn prepare_theme_for_zola(
     Ok((
         mounted_theme_dir.clone(),
         LocalThemeServeSync {
+            owned_root: repo_path.to_path_buf(),
             theme_source_root: theme_path,
             mounted_theme_dir,
             theme_index_path,
@@ -506,5 +509,22 @@ mod tests {
             std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap(),
             ACTIVE_PROPOSAL
         );
+    }
+}
+
+#[cfg(all(test, unix))]
+mod containment_regressions {
+    #[test]
+    fn theme_mount_rejects_ancestor_link_before_removing_anything() {
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("repo");
+        std::fs::create_dir(&project).unwrap();
+        let outside = temp.path().join("outside");
+        std::fs::create_dir_all(outside.join("eips-theme")).unwrap();
+        let sentinel = outside.join("eips-theme/keep.txt");
+        std::fs::write(&sentinel, "KEEP").unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("themes")).unwrap();
+        assert!(super::prepare_theme_for_zola(temp.path().join("source"), &project).is_err());
+        assert_eq!(std::fs::read_to_string(sentinel).unwrap(), "KEEP");
     }
 }
