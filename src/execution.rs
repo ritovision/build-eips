@@ -212,7 +212,13 @@ fn apply_sibling_sources(
 
             for repo_id in sibling_ids {
                 let path = workspace_config.local_repo_path(repo_id);
-                if git::repository_available(&path) {
+                if git::open_usable_repository(&path).is_ok() {
+                    git::validate_sibling_identity(&path, repo_id).with_whatever_context(|_| {
+                        format!(
+                            "invalid workspace-local sibling `{repo_id}` at `{}`",
+                            path.display()
+                        )
+                    })?;
                     local_repositories.push((repo_id.clone(), local_repo_url(&path)?));
                 } else {
                     missing.push(repo_id.clone());

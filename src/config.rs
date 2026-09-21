@@ -225,7 +225,7 @@ impl Manifest {
         })
     }
 
-    fn from_contents(manifest_path: PathBuf, contents: &str) -> Result<Self, Error> {
+    pub(crate) fn from_contents(manifest_path: PathBuf, contents: &str) -> Result<Self, Error> {
         let new = toml::from_str::<InnerManifest>(contents).context(ParseSnafu {
             manifest_path: &manifest_path,
         })?;

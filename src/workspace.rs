@@ -19,7 +19,7 @@ use url::Url;
 
 use crate::{
     cli::Args,
-    config::{self, ActiveRepo, LoadedWorkspaceConfig, Manifest},
+    config::{self, ActiveRepo, LoadedWorkspaceConfig},
     context::{resolve_input_path, root, WorkspaceCommandContext},
     git,
 };
@@ -179,36 +179,13 @@ fn check_sibling_manifest_id(
     sibling_path: &Path,
     expected_repo_id: &str,
 ) {
-    let manifest_path = sibling_path.join(config::MANIFEST_FILE);
-    match Manifest::load(&manifest_path) {
-        Ok(manifest) if manifest.name == *expected_repo_id => report.record(
-            DoctorStatus::Ok,
-            format!("sibling `{expected_repo_id}` Build.toml name matches workspace key"),
-        ),
-        Ok(manifest) => report.record(
-            DoctorStatus::Fail,
-            format!(
-                "sibling `{expected_repo_id}` Build.toml declares name `{}`",
-                manifest.name
-            ),
-        ),
-        Err(config::Error::Io { source, .. })
-            if matches!(
-                source.kind(),
-                ErrorKind::NotFound | ErrorKind::NotADirectory
-            ) => report.record(
-            DoctorStatus::Warn,
-            format!(
-                "sibling `{expected_repo_id}` has no Build.toml yet; this is a transitional rollout warning"
-            ),
-        ),
-        Err(error) => report.record(
-            DoctorStatus::Fail,
-            format!(
-                "sibling `{expected_repo_id}` Build.toml could not be loaded: {}",
-                Report::from_error(error)
-            ),
-        ),
+    match git::validate_sibling_identity(sibling_path, expected_repo_id) {
+        Ok(true) => report.record(DoctorStatus::Ok,
+            format!("sibling `{expected_repo_id}` working and committed Build.toml identities match workspace key")),
+        Ok(false) => report.record(DoctorStatus::Warn,
+            format!("sibling `{expected_repo_id}` has a missing working or committed Build.toml; this is a transitional rollout warning")),
+        Err(error) => report.record(DoctorStatus::Fail,
+            format!("invalid sibling `{expected_repo_id}`: {}", Report::from_error(error))),
     }
 }
 

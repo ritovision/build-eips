@@ -88,10 +88,6 @@ pub enum SourceMaterialization {
     Dirty,
 }
 
-pub fn repository_available(path: &Path) -> bool {
-    git2::Repository::open(path).is_ok()
-}
-
 /// Open a non-bare repository with a resolvable HEAD without modifying it.
 pub fn open_usable_repository(path: &Path) -> Result<git2::Repository, Error> {
     let repository =
@@ -101,6 +97,97 @@ pub fn open_usable_repository(path: &Path) -> Result<git2::Repository, Error> {
             })?;
     ensure_usable_workspace_repository(&repository, path)?;
     Ok(repository)
+}
+
+/// Validate every present manifest used by the local sibling contract. Missing
+/// manifests remain a supported transitional state; contradictory ones do not.
+/// The committed snapshot is checked again after fetch, before it is merged.
+pub(crate) fn validate_sibling_identity(
+    path: &Path,
+    expected: &str,
+) -> Result<bool, snafu::Whatever> {
+    let repo = open_usable_repository(path).whatever_context("unable to open sibling checkout")?;
+    let actual_root = repo
+        .workdir()
+        .whatever_context("sibling has no worktree")?
+        .canonicalize()
+        .whatever_context("unable to resolve sibling worktree")?;
+    if actual_root
+        != path
+            .canonicalize()
+            .whatever_context("unable to resolve sibling path")?
+    {
+        snafu::whatever!("sibling `{expected}` is not rooted at `{}`", path.display());
+    }
+    let manifest_path = path.join(crate::config::MANIFEST_FILE);
+    let working_present = match crate::config::Manifest::load(&manifest_path) {
+        Ok(manifest) => {
+            validate_sibling_name(&manifest, expected, "working tree")?;
+            true
+        }
+        Err(crate::config::Error::Io { source, .. })
+            if matches!(
+                source.kind(),
+                ErrorKind::NotFound | ErrorKind::NotADirectory
+            ) =>
+        {
+            false
+        }
+        Err(error) => {
+            return Err(error).whatever_context("unable to load sibling working-tree Build.toml")
+        }
+    };
+    let head = repo
+        .head()
+        .and_then(|h| h.peel_to_commit())
+        .whatever_context("unable to read sibling HEAD")?;
+    Ok(validate_sibling_commit(&repo, &head, expected)? && working_present)
+}
+
+fn validate_sibling_name(
+    manifest: &crate::config::Manifest,
+    expected: &str,
+    snapshot: &str,
+) -> Result<(), snafu::Whatever> {
+    if manifest.name != *expected {
+        snafu::whatever!(
+            "sibling `{expected}` {snapshot} Build.toml declares name `{}`",
+            manifest.name
+        );
+    }
+    Ok(())
+}
+
+fn validate_sibling_commit(
+    repo: &git2::Repository,
+    commit: &Commit<'_>,
+    expected: &str,
+) -> Result<bool, snafu::Whatever> {
+    let tree = commit
+        .tree()
+        .whatever_context("unable to read sibling commit tree")?;
+    let entry = match tree.get_path(Path::new(crate::config::MANIFEST_FILE)) {
+        Ok(entry) => entry,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => return Ok(false),
+        Err(error) => {
+            return Err(error).whatever_context("unable to read committed sibling Build.toml")
+        }
+    };
+    if !matches!(entry.filemode(), 0o100644 | 0o100755) {
+        snafu::whatever!("sibling `{expected}` committed Build.toml must be a regular file");
+    }
+    let blob = repo
+        .find_blob(entry.id())
+        .whatever_context("unable to read sibling manifest blob")?;
+    let text =
+        std::str::from_utf8(blob.content()).whatever_context("sibling manifest is not UTF-8")?;
+    let manifest = crate::config::Manifest::from_contents(
+        PathBuf::from(format!("{expected}@{}:Build.toml", commit.id())),
+        text,
+    )
+    .whatever_context("unable to parse committed sibling Build.toml")?;
+    validate_sibling_name(&manifest, expected, "committed")?;
+    Ok(true)
 }
 
 /// Return the commit currently checked out by a repository.
@@ -1126,6 +1213,14 @@ fn merge_sibling_repositories(
             format!("+master:{other_ref}")
         };
         let master_other = fetch(working_repo, other_repo.as_str(), &other_refspec)?;
+        if other_repo.scheme() == "file" {
+            validate_sibling_commit(working_repo, &master_other, other_kind).map_err(|error| {
+                UpdateTreeSnafu {
+                    msg: snafu::Report::from_error(error).to_string(),
+                }
+                .build()
+            })?;
+        }
         let other_tree = master_other.tree().context(GitSnafu {
             what: "getting other tree",
         })?;
@@ -1625,5 +1720,36 @@ mod tests {
         let error = materialize_working_tree(&theme, &mounted).unwrap_err();
 
         assert!(error.to_string().contains("unable to open root repository"));
+    }
+    fn identity_manifest(name: &str) -> String {
+        format!("name = \"{name}\"\n[locations.{name}]\nrepository=\"https://example.test/fork.git\"\nbase-url=\"https://example.test/\"\n[theme]\nrepository=\"https://example.test/theme.git\"\ncommit=\"test\"\n")
+    }
+    #[test]
+    fn sibling_identity_checks_working_and_committed_snapshots() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("ERCs");
+        let repo = init_repo(&path, &[("Build.toml", &identity_manifest("WrongRepo"))]);
+        assert!(super::validate_sibling_identity(&path, "ERCs").is_err());
+        write_file(&path, "Build.toml", &identity_manifest("ERCs"));
+        assert!(
+            super::validate_sibling_identity(&path, "ERCs").is_err(),
+            "working edits cannot mask wrong committed source"
+        );
+        commit_all(&repo, "correct identity");
+        assert!(super::validate_sibling_identity(&path, "ERCs").unwrap());
+        write_file(&path, "Build.toml", &identity_manifest("WrongRepo"));
+        assert!(super::validate_sibling_identity(&path, "ERCs").is_err());
+    }
+    #[test]
+    fn missing_legacy_manifest_is_allowed_but_parent_repository_is_not() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("ERCs");
+        init_repo(&path, &[("content/00002.md", "legacy")]);
+        assert!(!super::validate_sibling_identity(&path, "ERCs").unwrap());
+        let child = path.join("nested");
+        std::fs::create_dir(&child).unwrap();
+        assert!(super::validate_sibling_identity(&child, "ERCs").is_err());
+        write_file(&path, "Build.toml", "malformed");
+        assert!(super::validate_sibling_identity(&path, "ERCs").is_err());
     }
 }
