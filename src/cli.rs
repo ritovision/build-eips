@@ -56,7 +56,7 @@ pub(crate) struct BaseUrlCliArgs {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, clap::Args)]
 pub(crate) struct CleanCliArgs {
-    /// Ignore tracked working-tree changes in the active repo
+    /// Require a clean active checkout; the local theme remains editable
     #[arg(long)]
     pub(crate) clean: bool,
 }
@@ -734,5 +734,56 @@ mod tests {
             .unwrap_err();
 
         assert!(error.to_string().contains("unexpected argument '--config'"));
+    }
+}
+
+#[cfg(test)]
+mod documentation_regressions {
+    use super::Args;
+    use clap::{error::ErrorKind, Parser};
+
+    fn check_examples(document: &str) -> usize {
+        let mut count = 0;
+        let mut fenced = false;
+        for (line_number, line) in document.lines().enumerate() {
+            if line.trim_start().starts_with("```") {
+                fenced = !fenced;
+                continue;
+            }
+            let line = line.trim();
+            if !fenced || !line.starts_with("build-eips ") {
+                continue;
+            }
+            count += 1;
+            if let Err(error) = Args::try_parse_from(line.split_whitespace()) {
+                assert_eq!(
+                    error.kind(),
+                    ErrorKind::DisplayHelp,
+                    "invalid documented example at line {}: {line}\n{error}",
+                    line_number + 1
+                );
+            }
+        }
+        count
+    }
+    #[test]
+    fn embedded_guide_and_readme_commands_parse() {
+        assert!(check_examples(include_str!("workspace_doc.md")) >= 20);
+        assert!(check_examples(include_str!("../README.md")) >= 4);
+    }
+    #[test]
+    #[ignore = "requires downstream READMEs in BUILD_EIPS_DOC_PATHS"]
+    fn consuming_repository_readme_commands_parse() {
+        let paths = std::env::var_os("BUILD_EIPS_DOC_PATHS").expect("set BUILD_EIPS_DOC_PATHS");
+        let mut documents = 0;
+        for path in std::env::split_paths(&paths) {
+            assert!(
+                check_examples(&std::fs::read_to_string(&path).unwrap()) >= 10,
+                "{}",
+                path.display()
+            );
+            documents += 1;
+        }
+        assert!(documents >= 1);
     }
 }

@@ -169,15 +169,15 @@ Use `--remote-siblings` to resolve sibling proposal content from the active mani
 
 ```bash
 build-eips --remote-siblings check
-build-eips --clean --remote-siblings build
-build-eips --clean --remote-siblings serve
+build-eips --remote-siblings build --clean
+build-eips --remote-siblings serve --clean
 ```
 
 Use global `--build-root <path>` for a separate prepared repository and output directory, such as side-by-side local and clean builds. The path replaces the default `.local-build/<active-name>` location for commands that receive it, so reuse the same value when previewing that output.
 
 ```bash
 build-eips -C /work/EIPs-project/EIPs --build-root /tmp/eips-local build --base-url http://127.0.0.1:1111
-build-eips -C /work/EIPs-project/EIPs --build-root /tmp/eips-clean --clean --remote-siblings build --base-url http://127.0.0.1:1112
+build-eips -C /work/EIPs-project/EIPs --build-root /tmp/eips-clean --remote-siblings build --clean --base-url http://127.0.0.1:1112
 
 build-eips -C /work/EIPs-project/EIPs --build-root /tmp/eips-local preview --port 1111
 build-eips -C /work/EIPs-project/EIPs --build-root /tmp/eips-clean preview --port 1112
