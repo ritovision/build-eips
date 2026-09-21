@@ -16,6 +16,7 @@ mod git;
 mod github;
 mod layout;
 mod lint;
+mod live;
 mod markdown;
 mod pipeline;
 mod preview;

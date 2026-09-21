@@ -599,7 +599,7 @@ fn remove_existing_path(path: &Path) -> Result<(), std::io::Error> {
     }
 }
 
-fn tracked_paths(
+pub(crate) fn tracked_paths(
     root_path: &Path,
     include_path: impl Fn(&Path) -> bool,
 ) -> Result<BTreeSet<PathBuf>, Error> {
@@ -1026,7 +1026,8 @@ impl Fresh {
             panic!("submodules not supported yet");
         }
 
-        let mut local_head = master.id();
+        let source_head = master.id();
+        let mut local_head = source_head;
         drop(master);
         drop(branch);
 
@@ -1036,6 +1037,7 @@ impl Fresh {
         }
 
         Ok(SourceOnly {
+            source_head,
             local_head,
             src_repo_use: self.src_repo_use,
             working_repo: self.working_repo,
@@ -1043,7 +1045,15 @@ impl Fresh {
     }
 }
 
+/// Exact source commit plus its optional tracked-working-tree overlay commit.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SourceGeneration {
+    pub(crate) source_head: Oid,
+    pub(crate) materialized_head: Oid,
+}
+
 pub struct SourceOnly {
+    source_head: Oid,
     src_repo_use: RepositoryUse,
 
     working_repo: git2::Repository,
@@ -1051,6 +1061,13 @@ pub struct SourceOnly {
 }
 
 impl SourceOnly {
+    pub(crate) fn source_generation(&self) -> SourceGeneration {
+        SourceGeneration {
+            source_head: self.source_head,
+            materialized_head: self.local_head,
+        }
+    }
+
     pub fn merge(&self) -> Result<(), Error> {
         merge_sibling_repositories(&self.working_repo, &self.src_repo_use, self.local_head)
     }
@@ -1139,7 +1156,7 @@ impl SourceWithUpstream {
     }
 }
 
-fn check_ignored(working_repo: &git2::Repository, tree: &Tree) -> Result<(), Error> {
+pub(crate) fn check_ignored(working_repo: &git2::Repository, tree: &Tree) -> Result<(), Error> {
     let mut walk_error = None;
     let walk_result = tree.walk(git2::TreeWalkMode::PreOrder, |a, b| {
         if b.kind() != Some(ObjectType::Blob) {

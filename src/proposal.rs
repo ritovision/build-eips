@@ -243,6 +243,27 @@ impl OnlyRenderPlan {
         content_root: &Path,
         selected_numbers: BTreeSet<ProposalNumber>,
     ) -> Result<Self, Whatever> {
+        Self::build_inventory(content_root, selected_numbers, false)
+    }
+
+    pub(crate) fn selected_numbers(&self) -> BTreeSet<ProposalNumber> {
+        self.selected_numbers.clone()
+    }
+
+    /// Live deletion preserves selection intent. Missing selected proposals are
+    /// removed from output, not replaced by other proposals or silently reselected.
+    pub(crate) fn build_live(
+        content_root: &Path,
+        selected_numbers: BTreeSet<ProposalNumber>,
+    ) -> Result<Self, Whatever> {
+        Self::build_inventory(content_root, selected_numbers, true)
+    }
+
+    fn build_inventory(
+        content_root: &Path,
+        selected_numbers: BTreeSet<ProposalNumber>,
+        allow_missing: bool,
+    ) -> Result<Self, Whatever> {
         let mut plan = Self {
             selected_numbers,
             asset_inventory: BTreeMap::new(),
@@ -306,7 +327,7 @@ impl OnlyRenderPlan {
         plan.inventory_assets(content_root)?;
 
         for selected_number in &plan.selected_numbers {
-            if !plan.markdown_paths_by_number.contains_key(selected_number) {
+            if !plan.markdown_paths_by_number.contains_key(selected_number) && !allow_missing {
                 snafu::whatever!("selected proposal `{selected_number}` was not found");
             }
         }
@@ -581,14 +602,6 @@ impl OnlyRenderPlan {
         };
 
         self.should_sync_content_dirty_path(content_relative_path)
-    }
-
-    pub(crate) fn is_selected_proposal_markdown_path(&self, repo_relative_path: &Path) -> bool {
-        let Ok(content_relative_path) = repo_relative_path.strip_prefix(CONTENT_DIR) else {
-            return false;
-        };
-
-        self.is_selected_content_proposal_markdown_path(content_relative_path)
     }
 
     fn is_selected_content_proposal_markdown_path(&self, content_relative_path: &Path) -> bool {
@@ -1374,11 +1387,11 @@ mod tests {
         assert!(!plan.should_sync_dirty_path(Path::new("content/00678/assets/diagram.png")));
         assert!(!plan.should_sync_dirty_path(Path::new("content/00999.md")));
 
-        assert!(plan.is_selected_proposal_markdown_path(Path::new("content/00555.md")));
+        assert!(plan.is_selected_content_proposal_markdown_path(Path::new("00555.md")));
         assert!(
-            !plan.is_selected_proposal_markdown_path(Path::new("content/00555/assets/diagram.png"))
+            !plan.is_selected_content_proposal_markdown_path(Path::new("00555/assets/diagram.png"))
         );
-        assert!(!plan.is_selected_proposal_markdown_path(Path::new("content/_index.md")));
-        assert!(!plan.is_selected_proposal_markdown_path(Path::new("content/00678.md")));
+        assert!(!plan.is_selected_content_proposal_markdown_path(Path::new("_index.md")));
+        assert!(!plan.is_selected_content_proposal_markdown_path(Path::new("00678.md")));
     }
 }

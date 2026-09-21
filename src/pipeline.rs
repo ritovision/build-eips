@@ -50,7 +50,7 @@ fn prepare_runtime_source(
     repo_path: &Path,
     repository_use: &RepositoryUse,
     source_materialization: git::SourceMaterialization,
-) -> Result<(), Whatever> {
+) -> Result<git::SourceGeneration, Whatever> {
     let source = git::Fresh::new(
         root_path,
         repo_path,
@@ -65,7 +65,7 @@ fn prepare_runtime_source(
         .merge()
         .whatever_context("unable to merge ERC/EIP repositories")?;
 
-    Ok(())
+    Ok(source.source_generation())
 }
 
 #[derive(Debug)]
@@ -77,6 +77,7 @@ pub(crate) struct Prepared {
     local_theme_sync: Option<LocalThemeServeSync>,
     only_plan: Option<OnlyRenderPlan>,
     source_root: PathBuf,
+    source_generation: git::SourceGeneration,
     source_materialization: git::SourceMaterialization,
     server_binding: ServerBinding,
     base_url_override: Option<Url>,
@@ -103,7 +104,7 @@ impl Prepared {
         let content_path = repo_path.join(CONTENT_DIR);
         let output_path = output_path(&build_path);
 
-        prepare_runtime_source(
+        let source_generation = prepare_runtime_source(
             &root_path,
             &repo_path,
             &repository_use,
@@ -131,6 +132,7 @@ impl Prepared {
             output_path,
             only_plan,
             source_root: root_path,
+            source_generation,
             source_materialization,
             server_binding,
             base_url_override,
@@ -153,13 +155,14 @@ impl Prepared {
     }
 
     pub(crate) fn serve(self) -> Result<(), Whatever> {
-        let sync_config = serve_sync_config(
+        let mut sync_config = serve_sync_config(
             self.source_materialization,
             &self.source_root,
             &self.repo_path,
             self.only_plan.clone(),
             self.local_theme_sync.clone(),
         );
+        sync_config.set_source_generation(self.source_generation);
         let dirty_watcher = if sync_config.has_targets() {
             Some(
                 DirtyServeWatcher::start(sync_config)
@@ -353,6 +356,7 @@ mod tests {
             &resolved.repository_use,
             resolved.source_materialization,
         )
+        .map(|_| ())
     }
 
     fn prepared_path(resolved: &ResolvedExecution, relative: impl AsRef<Path>) -> PathBuf {

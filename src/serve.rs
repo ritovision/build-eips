@@ -16,14 +16,14 @@ use std::{
         Arc,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use log::{debug, info, warn};
 use notify::{Event, RecursiveMode, Watcher};
 use snafu::{Report, ResultExt, Whatever};
 
-use crate::{git, layout::CONTENT_DIR, markdown, proposal::OnlyRenderPlan};
+use crate::{git, live::LiveSource, proposal::OnlyRenderPlan};
 
 #[derive(Debug)]
 pub(crate) struct DirtyServeWatcher {
@@ -36,6 +36,7 @@ struct ActiveRepoServeSync {
     source_root: PathBuf,
     build_repo_path: PathBuf,
     only_plan: Option<OnlyRenderPlan>,
+    source_generation: Option<git::SourceGeneration>,
 }
 
 #[derive(Debug, Clone)]
@@ -53,6 +54,12 @@ pub(crate) struct ServeSyncConfig {
 }
 
 impl ServeSyncConfig {
+    pub(crate) fn set_source_generation(&mut self, generation: git::SourceGeneration) {
+        if let Some(active) = &mut self.active_repo {
+            active.source_generation = Some(generation);
+        }
+    }
+
     pub(crate) fn has_targets(&self) -> bool {
         self.active_repo.is_some() || self.local_theme.is_some()
     }
@@ -98,6 +105,9 @@ fn path_is_watched_source_path(root_path: &Path, path: &Path) -> bool {
 }
 
 fn event_has_watched_source_path(root_path: &Path, event: &Event) -> bool {
+    if matches!(event.kind, notify::EventKind::Access(_)) {
+        return false;
+    }
     event
         .paths
         .iter()
@@ -120,113 +130,59 @@ fn event_has_theme_index_path(index_path: &Path, event: &Event) -> bool {
     })
 }
 
-fn sync_dirty_serve_state(
-    source_root: &Path,
-    build_repo_path: &Path,
-    only_plan: Option<&OnlyRenderPlan>,
-    previous_dirty_paths: &mut BTreeSet<PathBuf>,
-) -> Result<(), Whatever> {
-    let current_dirty_paths = filter_dirty_paths(
-        git::working_tree_paths(source_root)
-            .whatever_context("unable to list tracked dirty paths for dirty serve")?,
-        only_plan,
-    );
-
-    let affected_paths = affected_dirty_paths(previous_dirty_paths, &current_dirty_paths);
-
-    if affected_paths.is_empty() {
-        *previous_dirty_paths = current_dirty_paths;
-        return Ok(());
-    }
-
-    for path in selected_deleted_proposal_markdown_paths(source_root, &affected_paths, only_plan) {
-        warn!(
-            "selected proposal path `{}` was removed from the source repo; removing it from the targeted serve build input",
-            path.to_string_lossy()
-        );
-    }
-
-    git::sync_materialized_paths(source_root, build_repo_path, &affected_paths)
-        .whatever_context("unable to synchronize tracked paths into the materialized repo")?;
-    markdown::preprocess_paths(
-        &build_repo_path.join(CONTENT_DIR),
-        &affected_paths,
-        only_plan,
-    )
-    .whatever_context("unable to preprocess synchronized markdown during dirty serve")?;
-
-    info!(
-        "synchronized {} tracked path(s) into the materialized repo for dirty serve",
-        affected_paths.len()
-    );
-
-    *previous_dirty_paths = current_dirty_paths;
-    Ok(())
+#[derive(Debug)]
+struct ActiveWatchPaths {
+    git_dir: PathBuf,
+    common_dir: PathBuf,
+    index: PathBuf,
 }
 
-fn filter_dirty_paths(
-    dirty_paths: impl IntoIterator<Item = PathBuf>,
-    only_plan: Option<&OnlyRenderPlan>,
-) -> BTreeSet<PathBuf> {
-    dirty_paths
-        .into_iter()
-        .filter(|path| {
-            only_plan
-                .map(|plan| plan.should_sync_dirty_path(path))
-                .unwrap_or(true)
+impl ActiveWatchPaths {
+    fn load(source: &Path) -> Result<Self, Whatever> {
+        let repo = git::open_usable_repository(source)
+            .whatever_context("unable to open watched source repository")?;
+        Ok(Self {
+            git_dir: repo.path().to_path_buf(),
+            common_dir: repo.commondir().to_path_buf(),
+            index: git::index_path(source).whatever_context("unable to locate active index")?,
         })
-        .collect()
-}
+    }
 
-fn affected_dirty_paths(
-    previous_dirty_paths: &BTreeSet<PathBuf>,
-    current_dirty_paths: &BTreeSet<PathBuf>,
-) -> BTreeSet<PathBuf> {
-    previous_dirty_paths
-        .union(current_dirty_paths)
-        .cloned()
-        .collect()
-}
+    fn has_event(&self, active: &ActiveRepoServeSync, event: &Event) -> bool {
+        if matches!(event.kind, notify::EventKind::Access(_)) {
+            return false;
+        }
+        event.paths.iter().any(|path| {
+            let source_file = path_is_watched_source_path(&active.source_root, path)
+                && !active
+                    .build_repo_path
+                    .parent()
+                    .is_some_and(|root| path.starts_with(root));
+            source_file
+                || path == &self.git_dir.join("HEAD")
+                || path == &self.common_dir.join("packed-refs")
+                || path.starts_with(self.common_dir.join("refs"))
+                || event_has_theme_index_path(&self.index, event)
+        })
+    }
 
-fn selected_deleted_proposal_markdown_paths(
-    source_root: &Path,
-    affected_paths: &BTreeSet<PathBuf>,
-    only_plan: Option<&OnlyRenderPlan>,
-) -> Vec<PathBuf> {
-    let Some(only_plan) = only_plan else {
-        return Vec::new();
-    };
-
-    affected_paths
-        .iter()
-        .filter(|path| only_plan.is_selected_proposal_markdown_path(path))
-        .filter(
-            |path| match std::fs::symlink_metadata(source_root.join(path)) {
-                Ok(_) => false,
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                    ) =>
-                {
-                    true
-                }
-                Err(_) => false,
-            },
-        )
-        .cloned()
-        .collect()
-}
-
-fn capture_active_dirty_paths(
-    source_root: &Path,
-    only_plan: Option<&OnlyRenderPlan>,
-) -> Result<BTreeSet<PathBuf>, Whatever> {
-    Ok(filter_dirty_paths(
-        git::working_tree_paths(source_root)
-            .whatever_context("unable to list tracked dirty paths for dirty serve")?,
-        only_plan,
-    ))
+    fn watch(&self, watcher: &mut notify::RecommendedWatcher) -> Result<(), String> {
+        watcher
+            .watch(&self.git_dir, RecursiveMode::NonRecursive)
+            .map_err(|e| format!("unable to watch active Git metadata: {e}"))?;
+        if self.common_dir != self.git_dir {
+            watcher
+                .watch(&self.common_dir, RecursiveMode::NonRecursive)
+                .map_err(|e| format!("unable to watch common Git metadata: {e}"))?;
+        }
+        let refs = self.common_dir.join("refs");
+        if refs.is_dir() {
+            watcher
+                .watch(&refs, RecursiveMode::Recursive)
+                .map_err(|e| format!("unable to watch active source refs: {e}"))?;
+        }
+        watch_theme_index(watcher, &self.index)
+    }
 }
 
 fn sync_theme_serve_state(
@@ -326,6 +282,26 @@ fn dirty_serve_sync_loop(
         }
     }
 
+    let active_watch_paths = match &sync_config.active_repo {
+        Some(active) => match ActiveWatchPaths::load(&active.source_root) {
+            Ok(paths) => {
+                if let Err(message) = paths.watch(&mut watcher) {
+                    let _ = ready_tx.send(Err(message));
+                    return;
+                }
+                Some(paths)
+            }
+            Err(error) => {
+                let _ = ready_tx.send(Err(format!(
+                    "unable to watch active Git state: {}",
+                    Report::from_error(error)
+                )));
+                return;
+            }
+        },
+        None => None,
+    };
+
     if let Some(local_theme) = &sync_config.local_theme {
         if let Err(error) = watcher.watch(&local_theme.theme_source_root, RecursiveMode::Recursive)
         {
@@ -342,21 +318,31 @@ fn dirty_serve_sync_loop(
         }
     }
 
-    let mut previous_active_dirty_paths: BTreeSet<_> = match &sync_config.active_repo {
-        Some(active_repo) => match capture_active_dirty_paths(
-            &active_repo.source_root,
-            active_repo.only_plan.as_ref(),
-        ) {
-            Ok(paths) => paths,
-            Err(error) => {
-                let _ = ready_tx.send(Err(format!(
-                    "unable to capture initial dirty serve state: {}",
-                    Report::from_error(error)
-                )));
+    let mut active_state = match &sync_config.active_repo {
+        Some(active) => {
+            let Some(commit) = active.source_generation else {
+                let _ = ready_tx.send(Err(
+                    "serve requires the recorded prepared active generation".into(),
+                ));
                 return;
+            };
+            match LiveSource::new(
+                &active.source_root,
+                &active.build_repo_path,
+                active.only_plan.as_ref(),
+                commit,
+            ) {
+                Ok(state) => Some(state),
+                Err(error) => {
+                    let _ = ready_tx.send(Err(format!(
+                        "unable to initialize live source generation: {}",
+                        Report::from_error(error)
+                    )));
+                    return;
+                }
             }
-        },
-        None => BTreeSet::new(),
+        }
+        None => None,
     };
 
     let mut previous_theme_dirty_paths: BTreeSet<_> = match &sync_config.local_theme {
@@ -425,8 +411,9 @@ fn dirty_serve_sync_loop(
         match first_event {
             Ok(event) => {
                 if let Some(active_repo) = &sync_config.active_repo {
-                    saw_active_event |=
-                        event_has_watched_source_path(&active_repo.source_root, &event);
+                    saw_active_event |= active_watch_paths
+                        .as_ref()
+                        .is_some_and(|paths| paths.has_event(active_repo, &event));
                 }
                 if let Some(local_theme) = &sync_config.local_theme {
                     saw_theme_event |=
@@ -439,12 +426,17 @@ fn dirty_serve_sync_loop(
             }
         }
 
+        let debounce_start = Instant::now();
         loop {
+            if debounce_start.elapsed() >= Duration::from_millis(500) {
+                break;
+            }
             match event_rx.recv_timeout(Duration::from_millis(75)) {
                 Ok(Ok(event)) => {
                     if let Some(active_repo) = &sync_config.active_repo {
-                        saw_active_event |=
-                            event_has_watched_source_path(&active_repo.source_root, &event);
+                        saw_active_event |= active_watch_paths
+                            .as_ref()
+                            .is_some_and(|paths| paths.has_event(active_repo, &event));
                     }
                     if let Some(local_theme) = &sync_config.local_theme {
                         saw_theme_event |=
@@ -462,15 +454,10 @@ fn dirty_serve_sync_loop(
         }
 
         if saw_active_event {
-            if let Some(active_repo) = &sync_config.active_repo {
-                if let Err(error) = sync_dirty_serve_state(
-                    &active_repo.source_root,
-                    &active_repo.build_repo_path,
-                    active_repo.only_plan.as_ref(),
-                    &mut previous_active_dirty_paths,
-                ) {
+            if let Some(state) = &mut active_state {
+                if let Err(error) = state.synchronize() {
                     warn!(
-                        "unable to synchronize dirty serve changes: {}",
+                        "unable to synchronize live source changes: {}",
                         Report::from_error(error)
                     );
                 }
@@ -515,6 +502,7 @@ pub(crate) fn serve_sync_config(
                 source_root: source_root.to_path_buf(),
                 build_repo_path: repo_path.to_path_buf(),
                 only_plan,
+                source_generation: None,
             }
         }),
         local_theme: local_theme_sync,
@@ -538,9 +526,7 @@ mod tests {
     };
 
     use super::{
-        affected_dirty_paths, event_has_theme_index_path, filter_dirty_paths,
-        selected_deleted_proposal_markdown_paths, serve_sync_config, sync_dirty_serve_state,
-        sync_theme_serve_state, LocalThemeServeSync,
+        event_has_theme_index_path, serve_sync_config, sync_theme_serve_state, LocalThemeServeSync,
     };
 
     fn fake_theme_sync(root: &Path) -> LocalThemeServeSync {
@@ -615,10 +601,6 @@ mod tests {
         OnlyRenderPlan::build(&content, [number(555)].into_iter().collect()).unwrap()
     }
 
-    fn paths(paths: &[&str]) -> BTreeSet<PathBuf> {
-        paths.iter().map(PathBuf::from).collect()
-    }
-
     fn rendered_body(path: &Path) -> String {
         let contents = std::fs::read_to_string(path).unwrap();
         contents.split_once("\n+++\n").unwrap().1.to_owned()
@@ -643,20 +625,12 @@ mod tests {
                 ),
             ],
         );
+        Repository::clone(source.to_str().unwrap(), &build).unwrap();
         let plan =
-            OnlyRenderPlan::build(&source.join("content"), [number(555)].into_iter().collect())
+            OnlyRenderPlan::build(&build.join("content"), [number(555)].into_iter().collect())
                 .unwrap();
-        init_repo(
-            &build,
-            &[
-                ("content/00555.md", selected.as_str()),
-                ("content/00555/assets/diagram.png", "selected image\n"),
-                (
-                    "content/_index.md",
-                    "---\ntitle: Home\n---\nSee [EIP-678](/00678.md).\n",
-                ),
-            ],
-        );
+        crate::markdown::preprocess(&build.join("content"), Some(&plan)).unwrap();
+        plan.prune_content(&build.join("content")).unwrap();
         (temp, source, build, plan)
     }
 
@@ -738,52 +712,19 @@ mod tests {
     }
 
     #[test]
-    fn only_dirty_path_filter_runs_before_union_and_keeps_selected_deletions() {
-        let temp = TempDir::new().unwrap();
-        let plan = only_plan(temp.path());
-        let previous_raw = paths(&[
-            "content/00555.md",
-            "content/00678.md",
-            "content/00678/assets/diagram.png",
-        ]);
-        let current_raw = paths(&["content/00555/assets/diagram.png", "content/00999.md"]);
-
-        let previous_filtered = filter_dirty_paths(previous_raw, Some(&plan));
-        let current_filtered = filter_dirty_paths(current_raw, Some(&plan));
-        let affected = affected_dirty_paths(&previous_filtered, &current_filtered);
-
-        assert_eq!(
-            affected,
-            paths(&["content/00555.md", "content/00555/assets/diagram.png"])
-        );
-    }
-
-    #[test]
-    fn selected_deleted_proposal_markdown_paths_reports_only_selected_markdown_deletions() {
-        let (_temp, source, _build, plan) = dirty_sync_fixture();
-        std::fs::remove_file(source.join("content/00555.md")).unwrap();
-        std::fs::remove_file(source.join("content/00555/assets/diagram.png")).unwrap();
-        std::fs::remove_file(source.join("content/_index.md")).unwrap();
-
-        let affected_paths = paths(&[
-            "content/00555.md",
-            "content/00555/assets/diagram.png",
-            "content/_index.md",
-            "content/00678.md",
-        ]);
-
-        assert_eq!(
-            selected_deleted_proposal_markdown_paths(&source, &affected_paths, Some(&plan)),
-            vec![PathBuf::from("content/00555.md")]
-        );
-        assert!(
-            selected_deleted_proposal_markdown_paths(&source, &affected_paths, None).is_empty()
-        );
-    }
-
-    #[test]
     fn only_dirty_sync_does_not_reintroduce_unselected_markdown_or_assets() {
         let (_temp, source, build, plan) = dirty_sync_fixture();
+        let commit = git::head_commit_id(&Repository::open(&source).unwrap()).unwrap();
+        let mut live = crate::live::LiveSource::new(
+            &source,
+            &build,
+            Some(&plan),
+            git::SourceGeneration {
+                source_head: commit,
+                materialized_head: commit,
+            },
+        )
+        .unwrap();
         write_file(
             &source,
             "content/00678.md",
@@ -794,37 +735,53 @@ mod tests {
             "content/00678/assets/diagram.png",
             "dirty unselected image\n",
         );
-        let mut previous_dirty_paths = BTreeSet::new();
-
-        sync_dirty_serve_state(&source, &build, Some(&plan), &mut previous_dirty_paths).unwrap();
+        live.synchronize().unwrap();
 
         assert!(!build.join("content/00678.md").exists());
         assert!(!build.join("content/00678/assets/diagram.png").exists());
-        assert!(previous_dirty_paths.is_empty());
     }
 
     #[test]
     fn only_dirty_sync_copies_selected_assets_without_markdown_preprocessing() {
         let (_temp, source, build, plan) = dirty_sync_fixture();
+        let commit = git::head_commit_id(&Repository::open(&source).unwrap()).unwrap();
+        let mut live = crate::live::LiveSource::new(
+            &source,
+            &build,
+            Some(&plan),
+            git::SourceGeneration {
+                source_head: commit,
+                materialized_head: commit,
+            },
+        )
+        .unwrap();
         write_file(
             &source,
             "content/00555/assets/diagram.png",
             "dirty selected image\n",
         );
-        let mut previous_dirty_paths = BTreeSet::new();
-
-        sync_dirty_serve_state(&source, &build, Some(&plan), &mut previous_dirty_paths).unwrap();
+        live.synchronize().unwrap();
 
         assert_eq!(
             std::fs::read_to_string(build.join("content/00555/assets/diagram.png")).unwrap(),
             "dirty selected image\n"
         );
-        assert!(previous_dirty_paths.contains(Path::new("content/00555/assets/diagram.png")));
     }
 
     #[test]
     fn only_dirty_sync_preprocesses_selected_and_retained_markdown_with_plan() {
         let (_temp, source, build, plan) = dirty_sync_fixture();
+        let commit = git::head_commit_id(&Repository::open(&source).unwrap()).unwrap();
+        let mut live = crate::live::LiveSource::new(
+            &source,
+            &build,
+            Some(&plan),
+            git::SourceGeneration {
+                source_head: commit,
+                materialized_head: commit,
+            },
+        )
+        .unwrap();
         write_file(
             &source,
             "content/00555.md",
@@ -835,9 +792,7 @@ mod tests {
             "content/_index.md",
             "---\ntitle: Home\n---\nDirty [EIP-678](/00678.md).\n",
         );
-        let mut previous_dirty_paths = BTreeSet::new();
-
-        sync_dirty_serve_state(&source, &build, Some(&plan), &mut previous_dirty_paths).unwrap();
+        live.synchronize().unwrap();
 
         let selected = std::fs::read_to_string(build.join("content/00555.md")).unwrap();
         let index_body = rendered_body(&build.join("content/_index.md"));
@@ -848,12 +803,224 @@ mod tests {
     #[test]
     fn only_dirty_sync_propagates_selected_proposal_deletion() {
         let (_temp, source, build, plan) = dirty_sync_fixture();
+        let commit = git::head_commit_id(&Repository::open(&source).unwrap()).unwrap();
+        let mut live = crate::live::LiveSource::new(
+            &source,
+            &build,
+            Some(&plan),
+            git::SourceGeneration {
+                source_head: commit,
+                materialized_head: commit,
+            },
+        )
+        .unwrap();
         std::fs::remove_file(source.join("content/00555.md")).unwrap();
-        let mut previous_dirty_paths = BTreeSet::new();
-
-        sync_dirty_serve_state(&source, &build, Some(&plan), &mut previous_dirty_paths).unwrap();
+        live.synchronize().unwrap();
 
         assert!(!build.join("content/00555.md").exists());
-        assert!(previous_dirty_paths.contains(Path::new("content/00555.md")));
+    }
+}
+
+#[cfg(test)]
+mod live_generation_regressions {
+    use super::*;
+    use git2::{Repository, Signature};
+    use std::fs;
+
+    fn write(root: &Path, path: &str, text: &str) {
+        let path = root.join(path);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, text).unwrap();
+    }
+    fn markdown(n: u32, body: &str) -> String {
+        format!("---\neip: {n}\ntitle: Proposal {n}\n---\n{body}\n")
+    }
+    fn commit(repo: &Repository) -> git2::Oid {
+        let mut index = repo.index().unwrap();
+        index
+            .add_all(["*"], git2::IndexAddOption::DEFAULT, None)
+            .unwrap();
+        index.write().unwrap();
+        let id = index.write_tree().unwrap();
+        let tree = repo.find_tree(id).unwrap();
+        let sig = Signature::now("test", "test@example.invalid").unwrap();
+        let parent = repo.head().ok().and_then(|h| h.peel_to_commit().ok());
+        repo.commit(
+            Some("HEAD"),
+            &sig,
+            &sig,
+            "test",
+            &tree,
+            &parent.iter().collect::<Vec<_>>(),
+        )
+        .unwrap()
+    }
+    struct Fixture {
+        _temp: tempfile::TempDir,
+        source: PathBuf,
+        build: PathBuf,
+        repo: Repository,
+        generation: git::SourceGeneration,
+        plan: Option<OnlyRenderPlan>,
+    }
+    impl Fixture {
+        fn new(targeted: bool) -> Self {
+            let temp = tempfile::tempdir().unwrap();
+            let source = temp.path().join("source");
+            let build = temp.path().join("build/repo");
+            fs::create_dir(&source).unwrap();
+            let repo = Repository::init(&source).unwrap();
+            write(&source, "content/00001.md", &markdown(1, "ORIGINAL"));
+            write(&source, "content/00002.md", &markdown(2, "OTHER"));
+            let head = commit(&repo);
+            Repository::clone(source.to_str().unwrap(), &build).unwrap();
+            let plan = targeted.then(|| {
+                OnlyRenderPlan::build(
+                    &build.join("content"),
+                    [crate::proposal::ProposalNumber::from_u32(1).unwrap()]
+                        .into_iter()
+                        .collect(),
+                )
+                .unwrap()
+            });
+            crate::markdown::preprocess(&build.join("content"), plan.as_ref()).unwrap();
+            if let Some(plan) = &plan {
+                plan.prune_content(&build.join("content")).unwrap();
+            }
+            Self {
+                _temp: temp,
+                source,
+                build,
+                repo,
+                generation: git::SourceGeneration {
+                    source_head: head,
+                    materialized_head: head,
+                },
+                plan,
+            }
+        }
+        fn live(&self) -> LiveSource {
+            LiveSource::new(
+                &self.source,
+                &self.build,
+                self.plan.as_ref(),
+                self.generation,
+            )
+            .unwrap()
+        }
+        fn stage(&self, path: &str) {
+            let mut index = self.repo.index().unwrap();
+            index.add_path(Path::new(path)).unwrap();
+            index.write().unwrap();
+        }
+    }
+
+    #[test]
+    fn staged_new_file_appears_and_unstaging_it_removes_it_without_source_mutation() {
+        let f = Fixture::new(false);
+        let mut live = f.live();
+        let head = f.repo.head().unwrap().target();
+        write(&f.source, "content/00003.md", &markdown(3, "NEW"));
+        assert_eq!(live.synchronize().unwrap(), 0);
+        assert!(!f.build.join("content/00003.md").exists());
+        f.stage("content/00003.md");
+        let index_before = fs::read(git::index_path(&f.source).unwrap()).unwrap();
+        live.synchronize().unwrap();
+        assert!(fs::read_to_string(f.build.join("content/00003.md"))
+            .unwrap()
+            .starts_with("+++"));
+        assert_eq!(
+            fs::read(git::index_path(&f.source).unwrap()).unwrap(),
+            index_before
+        );
+        let mut index = f.repo.index().unwrap();
+        index.remove_path(Path::new("content/00003.md")).unwrap();
+        index.write().unwrap();
+        live.synchronize().unwrap();
+        assert!(!f.build.join("content/00003.md").exists());
+        assert!(f.source.join("content/00003.md").exists());
+        assert_eq!(f.repo.head().unwrap().target(), head);
+    }
+    #[test]
+    fn clean_head_transition_is_compared_to_the_served_generation() {
+        let f = Fixture::new(false);
+        let mut live = f.live();
+        write(
+            &f.source,
+            "content/00001.md",
+            &markdown(1, "NEW CLEAN HEAD"),
+        );
+        commit(&f.repo);
+        assert!(git::working_tree_paths(&f.source).unwrap().is_empty());
+        live.synchronize().unwrap();
+        assert!(fs::read_to_string(f.build.join("content/00001.md"))
+            .unwrap()
+            .contains("NEW CLEAN HEAD"));
+    }
+    #[test]
+    fn startup_reconciliation_catches_a_change_after_preparation() {
+        let f = Fixture::new(false);
+        write(
+            &f.source,
+            "content/00001.md",
+            &markdown(1, "BETWEEN PREPARATION AND WATCH"),
+        );
+        let _live = f.live();
+        assert!(fs::read_to_string(f.build.join("content/00001.md"))
+            .unwrap()
+            .contains("BETWEEN PREPARATION AND WATCH"));
+    }
+    #[test]
+    fn targeted_inventory_refreshes_and_invalid_updates_retain_last_good_input_until_recovery() {
+        let f = Fixture::new(true);
+        let mut live = f.live();
+        write(&f.source, "content/00001/assets/new.txt", "NEW ASSET");
+        f.stage("content/00001/assets/new.txt");
+        write(
+            &f.source,
+            "content/00001.md",
+            &markdown(1, "[asset](00001/assets/new.txt)"),
+        );
+        live.synchronize().unwrap();
+        assert!(f.build.join("content/00001/assets/new.txt").exists());
+        let good = fs::read(f.build.join("content/00001.md")).unwrap();
+        write(
+            &f.source,
+            "content/00001.md",
+            &markdown(1, "[missing](00001/assets/not-there.txt)"),
+        );
+        for _ in 0..2 {
+            assert!(
+                live.synchronize().is_err(),
+                "an invalid raw candidate must not become successful on retry"
+            );
+            assert_eq!(fs::read(f.build.join("content/00001.md")).unwrap(), good);
+        }
+        write(
+            &f.source,
+            "content/00001.md",
+            &markdown(1, "RECOVERED [asset](00001/assets/new.txt)"),
+        );
+        live.synchronize().unwrap();
+        assert!(fs::read_to_string(f.build.join("content/00001.md"))
+            .unwrap()
+            .contains("RECOVERED"));
+        assert!(!f.build.join("content/00002.md").exists());
+    }
+    #[test]
+    fn access_events_do_not_cause_feedback_and_index_events_are_observed() {
+        let f = Fixture::new(false);
+        let paths = ActiveWatchPaths::load(&f.source).unwrap();
+        let active = ActiveRepoServeSync {
+            source_root: f.source.clone(),
+            build_repo_path: f.build.clone(),
+            only_plan: None,
+            source_generation: Some(f.generation),
+        };
+        let index = Event::new(notify::EventKind::Any).add_path(paths.index.clone());
+        assert!(paths.has_event(&active, &index));
+        let read = Event::new(notify::EventKind::Access(notify::event::AccessKind::Read))
+            .add_path(f.source.join("content/00001.md"));
+        assert!(!paths.has_event(&active, &read));
     }
 }
