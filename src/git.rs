@@ -303,19 +303,85 @@ fn open_existing_workspace_repository(
 }
 
 pub fn clone_missing_repo(url: &str, destination: &Path) -> Result<CloneOutcome, Error> {
+    clone_missing_repo_with_pin(url, destination, None)
+}
+
+/// Publish a new checkout only after both cloning and optional initial pinning
+/// succeed. Existing usable developer checkouts are never reset.
+pub fn clone_missing_repo_at_commit(
+    url: &str,
+    destination: &Path,
+    commit: &str,
+) -> Result<CloneOutcome, Error> {
+    clone_missing_repo_with_pin(url, destination, Some(commit))
+}
+
+fn clone_missing_repo_with_pin(
+    url: &str,
+    destination: &Path,
+    pin: Option<&str>,
+) -> Result<CloneOutcome, Error> {
+    let parent = destination.parent().ok_or_else(|| {
+        IoSnafu {
+            path: destination.to_path_buf(),
+        }
+        .into_error(std::io::Error::new(
+            ErrorKind::InvalidInput,
+            "workspace checkout has no parent",
+        ))
+    })?;
+    std::fs::create_dir_all(parent).with_context(|_| IoSnafu {
+        path: parent.to_path_buf(),
+    })?;
+    // Serialize cooperating initializers. The lock survives a killed initializer;
+    // the operating-system lock does not, so retry does not require stale-lock removal.
+    let lock_path = parent.join(".build-eips-init.lock");
+    let mut lock = fslock::LockFile::open(&lock_path).with_context(|_| IoSnafu {
+        path: lock_path.clone(),
+    })?;
+    lock.lock().with_context(|_| IoSnafu {
+        path: lock_path.clone(),
+    })?;
     if open_existing_workspace_repository(destination)?.is_some() {
-        info!(
-            "using existing workspace repo `{}`",
-            destination.to_string_lossy()
-        );
+        info!("using existing workspace repo `{}`", destination.display());
         return Ok(CloneOutcome::Existing);
     }
 
-    info!("cloning `{url}` into `{}`", destination.to_string_lossy());
-    let repository = git2::Repository::clone(url, destination).context(GitSnafu {
-        what: "clone workspace repository",
+    let staging = tempfile::Builder::new()
+        .prefix(".build-eips-init-")
+        .tempdir_in(parent)
+        .with_context(|_| IoSnafu {
+            path: parent.to_path_buf(),
+        })?;
+    let staged_repo = staging.path().join("checkout");
+    info!("cloning `{url}` for `{}`", destination.display());
+    {
+        let repository = git2::Repository::clone(url, &staged_repo).context(GitSnafu {
+            what: "clone staged workspace repository",
+        })?;
+        ensure_usable_workspace_repository(&repository, &staged_repo)?;
+    }
+    if let Some(commit) = pin {
+        checkout_fresh_clone_at_commit(&staged_repo, url, commit).map_err(|error| {
+            UpdateTreeSnafu {
+                msg: format!(
+                    "unable to fetch or check out active Build.toml theme commit `{commit}`: {}",
+                    snafu::Report::from_error(error)
+                ),
+            }
+            .build()
+        })?;
+    }
+    // Never replace another checkout that appeared while external tools ran.
+    if std::fs::symlink_metadata(destination).is_ok() {
+        return ExistingWorkspacePathSnafu {
+            path: destination.to_path_buf(),
+        }
+        .fail();
+    }
+    std::fs::rename(&staged_repo, destination).with_context(|_| IoSnafu {
+        path: destination.to_path_buf(),
     })?;
-    ensure_usable_workspace_repository(&repository, destination)?;
     Ok(CloneOutcome::Fresh)
 }
 
@@ -1768,5 +1834,83 @@ mod tests {
         assert!(super::validate_sibling_identity(&child, "ERCs").is_err());
         write_file(&path, "Build.toml", "malformed");
         assert!(super::validate_sibling_identity(&path, "ERCs").is_err());
+    }
+
+    #[test]
+    fn failed_initial_pin_never_becomes_success_on_retry() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        init_repo(&source, &[("theme.toml", "name='theme'")]);
+        let destination = temp.path().join("workspace/theme");
+        for _ in 0..2 {
+            assert!(super::clone_missing_repo_at_commit(
+                file_url(&source).as_str(),
+                &destination,
+                "ffffffffffffffffffffffffffffffffffffffff"
+            )
+            .is_err());
+            assert!(!destination.exists());
+        }
+        assert_eq!(
+            std::fs::read_dir(destination.parent().unwrap())
+                .unwrap()
+                .count(),
+            1,
+            "only the persistent initializer lock should remain"
+        );
+    }
+
+    #[test]
+    fn complete_pin_is_published_and_existing_dirty_theme_is_preserved() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let repo = init_repo(&source, &[("theme.toml", "old")]);
+        let pin = repo.head().unwrap().target().unwrap().to_string();
+        write_file(&source, "theme.toml", "new");
+        commit_all(&repo, "new");
+        let destination = temp.path().join("workspace/theme");
+        assert_eq!(
+            super::clone_missing_repo_at_commit(file_url(&source).as_str(), &destination, &pin)
+                .unwrap(),
+            super::CloneOutcome::Fresh
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("theme.toml")).unwrap(),
+            "old"
+        );
+        write_file(&destination, "theme.toml", "developer edits");
+        assert_eq!(
+            super::clone_missing_repo_at_commit(
+                file_url(&source).as_str(),
+                &destination,
+                "bad-pin"
+            )
+            .unwrap(),
+            super::CloneOutcome::Existing
+        );
+        assert_eq!(
+            std::fs::read_to_string(destination.join("theme.toml")).unwrap(),
+            "developer edits"
+        );
+    }
+
+    #[test]
+    fn initialization_does_not_replace_a_preexisting_plain_directory() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        init_repo(&source, &[("theme.toml", "theme")]);
+        let destination = temp.path().join("theme");
+        std::fs::create_dir(&destination).unwrap();
+        write_file(&destination, "keep", "sentinel");
+        assert!(super::clone_missing_repo_at_commit(
+            file_url(&source).as_str(),
+            &destination,
+            "HEAD"
+        )
+        .is_err());
+        assert_eq!(
+            std::fs::read_to_string(destination.join("keep")).unwrap(),
+            "sentinel"
+        );
     }
 }

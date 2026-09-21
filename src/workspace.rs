@@ -703,23 +703,11 @@ fn init_workspace_with_repositories(
     }
 
     let theme_path = workspace_root.join(config::DEFAULT_THEME_DIR);
-    if git::clone_missing_repo(theme.repository.as_str(), &theme_path)
+    git::clone_missing_repo_at_commit(theme.repository.as_str(), &theme_path, &theme.commit)
         .with_whatever_context(|_| {
-            format!(
-                "unable to prepare workspace theme repo at `{}`; destination must be missing or a usable git repository",
-                theme_path.to_string_lossy()
-            )
-        })?
-        == git::CloneOutcome::Fresh
-    {
-        git::checkout_fresh_clone_at_commit(&theme_path, theme.repository.as_str(), &theme.commit)
-            .with_whatever_context(|_| {
-                format!(
-                    "unable to fetch or check out active Build.toml theme commit `{}`",
-                    theme.commit
-                )
-            })?;
-    }
+            format!("unable to prepare workspace theme repo at `{}`; unable to fetch or check out active Build.toml theme commit `{}` for a fresh checkout; destination must be missing or a usable git repository",
+                theme_path.display(), theme.commit)
+        })?;
 
     if include_template {
         let template_path = workspace_root.join("template");
