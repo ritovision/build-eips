@@ -12,6 +12,7 @@ mod editorial;
 mod execution;
 mod find_root;
 mod generated_fs;
+mod generated_git;
 mod git;
 mod github;
 mod layout;

@@ -130,6 +130,8 @@ impl LiveSource {
             &stage,
         )
         .whatever_context("unable to clone prepared raw input for serving")?;
+        crate::generated_git::validate(&repo, &stage)
+            .whatever_context("unsafe generated live repository")?;
         let initial_merged =
             git::head_commit_id(&repo).whatever_context("unable to read prepared HEAD")?;
         let active_files = tree_files(&repo, generation.materialized_head)?;
@@ -218,7 +220,7 @@ impl LiveSource {
         }
         self.pending.extend(affected.iter().cloned());
         let files_before = file_stamps(&self.source, &affected)?;
-        let repo = Repository::open(&self.stage)
+        let repo = git::open_generated_repository(&self.stage)
             .whatever_context("unable to open serve staging repository")?;
         if repo.find_commit(stamp.0).is_err() {
             let url = url::Url::from_directory_path(&self.source)

@@ -631,9 +631,7 @@ pub fn sync_materialized_paths(
         return Ok(());
     }
 
-    let working_repo = git2::Repository::open(build_repo_path).context(GitSnafu {
-        what: "open build repository",
-    })?;
+    let working_repo = open_generated_repository(build_repo_path)?;
     let working_root = working_repo
         .workdir()
         .with_context(|| UpdateTreeSnafu::<String> {
@@ -1032,20 +1030,6 @@ impl Fresh {
                 path: repo_path.to_path_buf(),
             },
         )?;
-        crate::generated_fs::check_path(repo_path, &repo_path.join(".git"), false).with_context(
-            |_| IoSnafu {
-                path: repo_path.to_path_buf(),
-            },
-        )?;
-        if repo_path.join(".git").is_file() {
-            return Err(IoSnafu {
-                path: repo_path.to_path_buf(),
-            }
-            .into_error(std::io::Error::new(
-                ErrorKind::InvalidInput,
-                "generated repository cannot use an external gitdir/worktree pointer",
-            )));
-        }
         let working_repo = open_or_init(repo_path)?;
 
         Ok(Self {
@@ -1469,7 +1453,18 @@ fn fetch<'a>(
     Ok(commit)
 }
 
+pub(crate) fn open_generated_repository(dir: &Path) -> Result<git2::Repository, Error> {
+    crate::generated_git::check_metadata_path(dir).with_context(|_| IoSnafu { path: dir })?;
+    let repo = git2::Repository::open_ext(dir, RepositoryOpenFlags::NO_SEARCH, &[] as &[&OsStr])
+        .context(GitSnafu {
+            what: "open owned generated repository",
+        })?;
+    crate::generated_git::validate(&repo, dir).with_context(|_| IoSnafu { path: dir })?;
+    Ok(repo)
+}
+
 fn open_or_init(dir: &Path) -> Result<git2::Repository, Error> {
+    crate::generated_git::check_metadata_path(dir).with_context(|_| IoSnafu { path: dir })?;
     let repo =
         match git2::Repository::open_ext(dir, RepositoryOpenFlags::NO_SEARCH, &[] as &[&OsStr]) {
             Ok(r) => r,
@@ -1478,6 +1473,7 @@ fn open_or_init(dir: &Path) -> Result<git2::Repository, Error> {
             }
             Err(e) => return Err(GitSnafu { what: "open repo" }.into_error(e)),
         };
+    crate::generated_git::validate(&repo, dir).with_context(|_| IoSnafu { path: dir })?;
     Ok(repo)
 }
 
