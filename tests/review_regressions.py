@@ -64,6 +64,26 @@ def r01():
     record('R01-metadata-directory-link',w)
 
 
+def r03():
+    for kind in ('committed','dirty-tracked','staged-new','local-only'):
+        w,r,t=fixture('manifest-'+kind)
+        if kind in ('staged-new','local-only'):
+            git(r,'rm','--cached','Build.toml');git(r,'commit','-qm','manifest is local-only')
+            if kind=='staged-new':git(r,'add','Build.toml')
+        if kind=='dirty-tracked':write(r/'Build.toml',(r/'Build.toml').read_text()+'\n# local policy comment\n')
+        result=runbuild(w,r);assert result.returncode==0,result.stdout
+        proc,f,port=startserver(w,r)
+        try:
+            assert http(port,'/1/')[0]==200
+            original=(r/'Build.toml').read_text()
+            write(r/'Build.toml',original+'\n# later change\n')
+            eventually(lambda:'restart serve' in (w/'serve.log').read_text(),w,'real configuration change not diagnosed')
+            write(r/'Build.toml',original);write(r/'content/00001.md',md(1,'MANIFEST RECOVERED'))
+            eventually(lambda:'MANIFEST RECOVERED' in http(port,'/1/')[1],w,'restored configuration did not recover')
+            record('R03-'+kind,w)
+        finally:stopserver(proc,f)
+
+
 if __name__=='__main__':
     if os.name!='posix':raise SystemExit('Native Windows acceptance is separate from this POSIX process harness.')
     parser=argparse.ArgumentParser();parser.add_argument('--build-eips',type=Path,required=True);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--cases',nargs='+',default=['r01'])

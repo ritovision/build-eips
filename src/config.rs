@@ -274,6 +274,8 @@ impl TryFrom<Manifest> for RepositoryUse {
 /// Resolved manifest context for the active proposal repository.
 #[derive(Debug, Clone)]
 pub struct ActiveRepo {
+    /// Exact physical bytes parsed to authorize this execution.
+    pub(crate) manifest_contents: Vec<u8>,
     /// Managed workspace title for the active repository.
     pub title: String,
 
@@ -290,7 +292,10 @@ pub struct ActiveRepo {
 impl ActiveRepo {
     /// Load the active repository manifest from its working-tree checkout.
     pub fn load(repo_root: &Path) -> Result<Self, Error> {
-        let manifest = Manifest::load(repo_root.join(MANIFEST_FILE))?;
+        let path = repo_root.join(MANIFEST_FILE);
+        let contents =
+            std::fs::read_to_string(&path).with_context(|_| IoSnafu { path: path.clone() })?;
+        let manifest = Manifest::from_contents(path, &contents)?;
         let manifest_path = manifest.manifest_path.clone();
         let theme = manifest.theme.clone();
         let repository_use =
@@ -304,6 +309,7 @@ impl ActiveRepo {
         sibling_ids.sort();
 
         Ok(Self {
+            manifest_contents: contents.into_bytes(),
             title,
             sibling_ids,
             repository_use,
@@ -424,12 +430,16 @@ impl SiteSettings {
 
 #[derive(Debug, Clone)]
 pub struct LoadedWorkspaceConfig {
+    contents: Vec<u8>,
     config_path: PathBuf,
     workspace_root: PathBuf,
     config: WorkspaceConfig,
 }
 
 impl LoadedWorkspaceConfig {
+    pub(crate) fn loaded_contents(&self) -> &[u8] {
+        &self.contents
+    }
     pub fn from_path(path: &Path) -> Result<Self, WorkspaceError> {
         let config_path = path.canonicalize().with_context(|_| FsSnafu {
             path: path.to_path_buf(),
@@ -448,6 +458,7 @@ impl LoadedWorkspaceConfig {
             .to_path_buf();
 
         Ok(Self {
+            contents: contents.into_bytes(),
             config_path,
             workspace_root,
             config,

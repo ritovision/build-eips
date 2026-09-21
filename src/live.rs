@@ -32,7 +32,7 @@ pub(crate) struct LiveSource {
     initial_merged: Oid,
     last_good_tree: Oid,
     publication_uncertain: bool,
-    initial_manifest: Option<Vec<u8>>,
+    configuration: crate::execution::ConfigurationSnapshot,
     sibling_files: BTreeMap<PathBuf, (Oid, i32)>,
     previous_head: Oid,
     previous_paths: BTreeSet<PathBuf>,
@@ -59,16 +59,6 @@ fn tree_files(repo: &Repository, commit: Oid) -> Result<BTreeMap<PathBuf, (Oid, 
     })
     .whatever_context("unable to inventory source tree")?;
     Ok(paths)
-}
-
-fn read_optional(path: &Path) -> Result<Option<Vec<u8>>, Whatever> {
-    match std::fs::read(path) {
-        Ok(bytes) => Ok(Some(bytes)),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(error) => {
-            Err(error).with_whatever_context(|_| format!("unable to read {}", path.display()))
-        }
-    }
 }
 
 fn source_stamp(source: &Path) -> Result<(Oid, Oid), Whatever> {
@@ -115,6 +105,7 @@ impl LiveSource {
         live: &Path,
         plan: Option<&OnlyRenderPlan>,
         generation: git::SourceGeneration,
+        configuration: crate::execution::ConfigurationSnapshot,
     ) -> Result<Self, Whatever> {
         let scratch = tempfile::Builder::new()
             .prefix(".serve-generation-")
@@ -135,11 +126,6 @@ impl LiveSource {
         let initial_merged =
             git::head_commit_id(&repo).whatever_context("unable to read prepared HEAD")?;
         let active_files = tree_files(&repo, generation.materialized_head)?;
-        let initial_manifest = active_files
-            .get(Path::new("Build.toml"))
-            .map(|(id, _)| repo.find_blob(*id).map(|blob| blob.content().to_vec()))
-            .transpose()
-            .whatever_context("unable to read prepared active manifest")?;
         // Prepared merge commits record each sibling as their second parent.
         // Preserve that exact sibling snapshot for conflict checks during serve.
         let mut sibling_files = BTreeMap::new();
@@ -173,7 +159,7 @@ impl LiveSource {
                 .whatever_context("unable to identify initial validated input")?
                 .id(),
             publication_uncertain: false,
-            initial_manifest,
+            configuration,
             sibling_files,
             previous_head: generation.source_head,
             previous_paths: active_files
@@ -195,9 +181,7 @@ impl LiveSource {
     }
 
     fn synchronize_inner(&mut self, force: bool) -> Result<usize, Whatever> {
-        if read_optional(&self.source.join("Build.toml"))? != self.initial_manifest {
-            snafu::whatever!("active Build.toml changed; restart serve to resolve the new workspace/source policy. Last-good input retained");
-        }
+        self.configuration.verify()?;
         let stamp = source_stamp(&self.source)?;
         let dirty: BTreeSet<_> = git::working_tree_paths(&self.source)
             .whatever_context("unable to read active dirty paths")?
@@ -386,6 +370,7 @@ impl LiveSource {
         {
             snafu::whatever!("active source changed during preprocessing; last-good input retained until the next update");
         }
+        self.configuration.verify()?;
         // This boundary is intentionally after all parsing and transformation.
         // Publication I/O can still fail midway; keep pending paths for retry.
         self.publication_uncertain = true;

@@ -49,11 +49,15 @@ pub(crate) struct LocalThemeServeSync {
 
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ServeSyncConfig {
+    configuration: crate::execution::ConfigurationSnapshot,
     active_repo: Option<ActiveRepoServeSync>,
     local_theme: Option<LocalThemeServeSync>,
 }
 
 impl ServeSyncConfig {
+    pub(crate) fn set_configuration(&mut self, snapshot: crate::execution::ConfigurationSnapshot) {
+        self.configuration = snapshot;
+    }
     pub(crate) fn set_source_generation(&mut self, generation: git::SourceGeneration) {
         if let Some(active) = &mut self.active_repo {
             active.source_generation = Some(generation);
@@ -318,6 +322,23 @@ fn dirty_serve_sync_loop(
         }
     }
 
+    for (path, _) in &sync_config.configuration.0 {
+        if let Some(parent) = path.parent() {
+            if let Err(error) = watcher.watch(parent, RecursiveMode::NonRecursive) {
+                let _ = ready_tx.send(Err(format!(
+                    "unable to watch resolved configuration: {error}"
+                )));
+                return;
+            }
+        }
+    }
+    if let Err(error) = sync_config.configuration.verify() {
+        let _ = ready_tx.send(Err(format!(
+            "invalid serve configuration: {}",
+            Report::from_error(error)
+        )));
+        return;
+    }
     let mut active_state = match &sync_config.active_repo {
         Some(active) => {
             let Some(commit) = active.source_generation else {
@@ -331,6 +352,7 @@ fn dirty_serve_sync_loop(
                 &active.build_repo_path,
                 active.only_plan.as_ref(),
                 commit,
+                sync_config.configuration.clone(),
             ) {
                 Ok(state) => Some(state),
                 Err(error) => {
@@ -411,6 +433,12 @@ fn dirty_serve_sync_loop(
         match first_event {
             Ok(event) => {
                 if let Some(active_repo) = &sync_config.active_repo {
+                    saw_active_event |= sync_config
+                        .configuration
+                        .0
+                        .iter()
+                        .any(|(p, _)| event.paths.contains(p))
+                        && !matches!(event.kind, notify::EventKind::Access(_));
                     saw_active_event |= active_watch_paths
                         .as_ref()
                         .is_some_and(|paths| paths.has_event(active_repo, &event));
@@ -434,6 +462,12 @@ fn dirty_serve_sync_loop(
             match event_rx.recv_timeout(Duration::from_millis(75)) {
                 Ok(Ok(event)) => {
                     if let Some(active_repo) = &sync_config.active_repo {
+                        saw_active_event |= sync_config
+                            .configuration
+                            .0
+                            .iter()
+                            .any(|(p, _)| event.paths.contains(p))
+                            && !matches!(event.kind, notify::EventKind::Access(_));
                         saw_active_event |= active_watch_paths
                             .as_ref()
                             .is_some_and(|paths| paths.has_event(active_repo, &event));
@@ -497,6 +531,7 @@ pub(crate) fn serve_sync_config(
     local_theme_sync: Option<LocalThemeServeSync>,
 ) -> ServeSyncConfig {
     ServeSyncConfig {
+        configuration: Default::default(),
         active_repo: (source_materialization == git::SourceMaterialization::Dirty).then(|| {
             ActiveRepoServeSync {
                 source_root: source_root.to_path_buf(),
@@ -723,6 +758,7 @@ mod tests {
                 source_head: commit,
                 materialized_head: commit,
             },
+            Default::default(),
         )
         .unwrap();
         write_file(
@@ -753,6 +789,7 @@ mod tests {
                 source_head: commit,
                 materialized_head: commit,
             },
+            Default::default(),
         )
         .unwrap();
         write_file(
@@ -780,6 +817,7 @@ mod tests {
                 source_head: commit,
                 materialized_head: commit,
             },
+            Default::default(),
         )
         .unwrap();
         write_file(
@@ -812,6 +850,7 @@ mod tests {
                 source_head: commit,
                 materialized_head: commit,
             },
+            Default::default(),
         )
         .unwrap();
         std::fs::remove_file(source.join("content/00555.md")).unwrap();
@@ -905,6 +944,7 @@ mod live_generation_regressions {
                 &self.build,
                 self.plan.as_ref(),
                 self.generation,
+                Default::default(),
             )
             .unwrap()
         }

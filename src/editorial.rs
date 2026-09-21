@@ -558,6 +558,7 @@ mod tests {
 
     fn resolved_execution(root_path: PathBuf) -> ResolvedExecution {
         ResolvedExecution {
+            configuration: Default::default(),
             root_path,
             build_path: PathBuf::from("/workspace/build/Core"),
             repository_use: RepositoryUse {
@@ -770,6 +771,7 @@ mod tests {
     #[test]
     fn editorial_working_tree_check_still_forces_dirty_runtime_materialization() {
         let resolved = ResolvedExecution {
+            configuration: Default::default(),
             root_path: PathBuf::from("/workspace/Core"),
             build_path: PathBuf::from("/workspace/build/Core"),
             repository_use: RepositoryUse {

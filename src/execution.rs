@@ -25,8 +25,31 @@ use crate::{
     proposal::ProposalNumber,
 };
 
+/// Immutable provenance of the exact physical configuration parsed at resolution.
+/// Git tracking membership does not decide whether a local manifest is valid.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ConfigurationSnapshot(pub(crate) Vec<(PathBuf, Vec<u8>)>);
+
+impl ConfigurationSnapshot {
+    pub(crate) fn verify(&self) -> Result<(), Whatever> {
+        for (path, expected) in &self.0 {
+            let actual = std::fs::read(path).with_whatever_context(|_| {
+                format!(
+                    "configuration `{}` is unavailable; restart serve",
+                    path.display()
+                )
+            })?;
+            if &actual != expected {
+                snafu::whatever!("configuration `{}` changed; restart serve to resolve the new workspace/source policy. Last-good input retained", path.display());
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone)]
 pub(crate) struct ResolvedExecution {
+    pub(crate) configuration: ConfigurationSnapshot,
     pub(crate) root_path: PathBuf,
     pub(crate) build_path: PathBuf,
     pub(crate) repository_use: RepositoryUse,
@@ -355,6 +378,16 @@ pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatev
         );
     }
 
+    let mut configuration = ConfigurationSnapshot(vec![(
+        root_path.join(config::MANIFEST_FILE),
+        active_repo.manifest_contents.clone(),
+    )]);
+    if let Some(workspace) = &workspace_config {
+        configuration.0.push((
+            workspace.config_path().to_path_buf(),
+            workspace.loaded_contents().to_vec(),
+        ));
+    }
     let settings = resolve_execution_settings(args, &sibling_ids, workspace_config.as_ref())?;
     let only = resolve_only_selection(args, &settings, workspace_config.as_ref())?;
     let theme_path = resolve_theme_path(workspace_config.as_ref(), &args.operation)?;
@@ -384,6 +417,7 @@ pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatev
     let base_url_override = resolve_base_url_override(args, workspace_config.as_ref())?;
 
     Ok(ResolvedExecution {
+        configuration,
         root_path,
         build_path,
         repository_use,
@@ -744,5 +778,22 @@ commit = "test-theme-commit"
     #[test]
     fn dirty_build_toml_is_rejected_for_clean_remote_siblings() {
         assert_dirty_manifest_is_rejected(&["--remote-siblings", "build", "--clean"]);
+    }
+}
+
+#[cfg(test)]
+mod provenance_regressions {
+    use super::*;
+    #[test]
+    fn snapshot_rejects_changes_after_resolution_instead_of_resampling() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("Build.toml");
+        std::fs::write(&path, "resolved").unwrap();
+        let snapshot = ConfigurationSnapshot(vec![(path.clone(), b"resolved".to_vec())]);
+        snapshot.verify().unwrap();
+        std::fs::write(&path, "changed between resolution and watch").unwrap();
+        assert!(snapshot.verify().is_err());
+        std::fs::remove_file(&path).unwrap();
+        assert!(snapshot.verify().is_err());
     }
 }

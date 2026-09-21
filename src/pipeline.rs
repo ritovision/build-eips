@@ -13,7 +13,7 @@ use url::Url;
 
 use crate::{
     config::{RepositoryUse, ServerBinding},
-    execution::ResolvedExecution,
+    execution::{ConfigurationSnapshot, ResolvedExecution},
     git,
     layout::{mounted_theme_path, output_path, CONTENT_DIR, REPO_DIR},
     markdown,
@@ -70,6 +70,7 @@ fn prepare_runtime_source(
 
 #[derive(Debug)]
 pub(crate) struct Prepared {
+    configuration: ConfigurationSnapshot,
     repo_path: PathBuf,
     output_path: PathBuf,
     repository_use: RepositoryUse,
@@ -88,6 +89,7 @@ impl Prepared {
         zola::find_zola().whatever_context("unable to find suitable zola binary")?;
 
         let ResolvedExecution {
+            configuration,
             root_path,
             build_path,
             repository_use,
@@ -97,6 +99,7 @@ impl Prepared {
             server_binding,
             base_url_override,
         } = resolved;
+        configuration.verify()?;
         let theme_path =
             theme_path.whatever_context("Zola runtime requires a workspace-local theme path")?;
 
@@ -125,6 +128,7 @@ impl Prepared {
         let (theme_path, local_theme_sync) = prepare_theme_for_zola(theme_path, &repo_path)?;
 
         Ok(Prepared {
+            configuration,
             repository_use,
             theme_path,
             local_theme_sync: Some(local_theme_sync),
@@ -163,6 +167,7 @@ impl Prepared {
             self.local_theme_sync.clone(),
         );
         sync_config.set_source_generation(self.source_generation);
+        sync_config.set_configuration(self.configuration);
         let dirty_watcher = if sync_config.has_targets() {
             Some(
                 DirtyServeWatcher::start(sync_config)
