@@ -259,6 +259,55 @@ def theme_config_gate():
     finally:stopserver(proc,f)
 
 
+def r04_normalization():
+    w,r,t=fixture('native-git-normalization');sib=w/'ERCs'
+    original='content/shared.txt text eol=crlf\n'
+    write(r/'.gitattributes',original);write(r/'content/shared.txt','IDENTICAL\n');commit(r)
+    write(sib/'content/shared.txt','IDENTICAL\n');write(sib/'Build.toml',manifest(sib,'ERCs',t,git(t,'rev-parse','HEAD')));initgit(sib)
+    write(r/'Build.toml',manifest(r,'EIPs',t,git(t,'rev-parse','HEAD'),{'ERCs':sib}));commit(r)
+    (r/'content/shared.txt').write_bytes(b'IDENTICAL\r\n')
+    assert runbuild(w,r).returncode==0
+    proc,f,port=startserver(w,r)
+    try:
+        assert http(port,'/1/')[0]==200
+        for policy in ('disable','delete'):
+            before=(w/'serve.log').stat().st_size
+            if policy=='disable':write(r/'.gitattributes','content/shared.txt -text\n')
+            else:(r/'.gitattributes').unlink()
+            eventually(lambda:'conflicts with startup sibling snapshot' in (w/'serve.log').read_text()[before:],w,'attribute change not used for live identity: '+policy)
+            result=cmd([BIN,'-C',r,'--build-root',w/('fresh-'+policy),'build'],check=False)
+            assert result.returncode!=0 and 'conflicting path' in result.stdout,result.stdout
+            write(r/'.gitattributes',original);write(r/'content/00001.md',md(1,'FILTER RECOVERED '+policy))
+            eventually(lambda:'FILTER RECOVERED '+policy in http(port,'/1/')[1],w,'restored filters did not recover')
+        assert (r/'content/shared.txt').read_bytes()==b'IDENTICAL\r\n'
+        record('R04-native-clean-filters-and-attribute-lifecycle',w)
+    finally:stopserver(proc,f)
+
+
+def attribute_path_controls():
+    w,r,t=fixture('attribute-link-controls');write(r/'.gitattributes','*.txt text\n');write(r/'attributes.txt','*.txt text\n');commit(r)
+    proc,f,port=startserver(w,r)
+    try:
+        path=r/'.gitattributes';path.unlink();path.symlink_to('attributes.txt')
+        eventually(lambda:'attribute configuration' in (w/'serve.log').read_text(),w,'linked attribute config not diagnosed')
+        result=cmd([BIN,'-C',r,'--build-root',w/'fresh-linked-attributes','build'],check=False)
+        assert result.returncode!=0 and 'attribute configuration' in result.stdout,result.stdout
+        git(r,'restore','.gitattributes');write(r/'content/00001.md',md(1,'ATTRIBUTE RECOVERY'))
+        eventually(lambda:'ATTRIBUTE RECOVERY' in http(port,'/1/')[1],w,'regular attribute config did not recover')
+        record('R04-attribute-configuration-link-rejection',w)
+    finally:stopserver(proc,f)
+    w,r,t=fixture('nested-attribute-shape');write(r/'static/entry/.gitattributes','*.txt text\n');write(r/'static/entry/child.txt','CHILD');commit(r)
+    git(r,'checkout','-qb','file-shape');git(r,'rm','-r','static/entry');write(r/'static/entry','FILE');commit(r);git(r,'checkout','-q','master')
+    proc,f,port=startserver(w,r)
+    try:
+        git(r,'checkout','-q','file-shape')
+        eventually(lambda:http(port,'/entry')==(200,'FILE'),w,'obsolete nested attributes poisoned shape transition')
+        git(r,'checkout','-q','master')
+        eventually(lambda:http(port,'/entry/child.txt')==(200,'CHILD'),w,'restored nested attributes failed')
+        record('R02-R04-nested-attribute-shape-transitions',w)
+    finally:stopserver(proc,f)
+
+
 if __name__=='__main__':
     if os.name!='posix':raise SystemExit('Native Windows acceptance is separate from this POSIX process harness.')
     parser=argparse.ArgumentParser();parser.add_argument('--build-eips',type=Path,required=True);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--cases',nargs='+',default=['r01'])

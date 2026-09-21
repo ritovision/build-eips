@@ -779,12 +779,31 @@ fn copy_symlink(_source: &Path, _destination: &Path) -> Result<(), std::io::Erro
     ))
 }
 
+pub(crate) fn validate_attribute_inputs(
+    root: &Path,
+    paths: &BTreeSet<PathBuf>,
+) -> Result<(), Error> {
+    for path in paths
+        .iter()
+        .filter(|p| p.file_name().is_some_and(|n| n == ".gitattributes"))
+    {
+        let metadata = crate::tree_sync::inspect(root, path).with_context(|_| IoSnafu {
+            path: root.join(path),
+        })?;
+        ensure!(metadata.is_none_or(|m| m.is_file() && !crate::generated_fs::is_link(&m)), UpdateTreeSnafu {
+            msg: format!("Git attribute configuration `{}` must be an ordinary file, not a link or directory", path.display()),
+        });
+    }
+    Ok(())
+}
+
 fn sync_dirty_paths(
     source_root: &Path,
     working_root: &Path,
     index: &mut git2::Index,
     relative_paths: &BTreeSet<PathBuf>,
 ) -> Result<(), Error> {
+    validate_attribute_inputs(source_root, relative_paths)?;
     let plan = crate::tree_sync::Plan::new(source_root, working_root, relative_paths)
         .with_context(|_| IoSnafu { path: working_root })?;
     plan.prepare_destination(working_root)
@@ -1030,9 +1049,22 @@ pub(crate) fn working_entry_identity(
         }
         .fail();
     };
-    let id = Oid::hash_object(ObjectType::Blob, &bytes).context(GitSnafu {
-        what: "hash source entry",
-    })?;
+    let id = if meta.file_type().is_symlink() {
+        // Git stores link text verbatim; never filter or dereference its target.
+        Oid::hash_object(ObjectType::Blob, &bytes).context(GitSnafu {
+            what: "hash source link",
+        })?
+    } else {
+        // Match Index::add_path's clean filters, not the physical worktree bytes.
+        // This writes only an immutable blob in the private generated repository.
+        let mut writer = repo.blob_writer(Some(relative)).context(GitSnafu {
+            what: "create filtered source identity",
+        })?;
+        std::io::Write::write_all(&mut writer, &bytes).with_context(|_| IoSnafu { path: &path })?;
+        writer.commit().context(GitSnafu {
+            what: "resolve filtered source identity",
+        })?
+    };
     Ok(Some(EntryIdentity {
         id,
         mode,

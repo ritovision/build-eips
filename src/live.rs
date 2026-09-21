@@ -193,6 +193,34 @@ impl LiveSource {
             repo.checkout_index(None, Some(&mut checkout))
                 .whatever_context("unable to restore raw staging input")?;
         }
+        // Admission must use the same tracked attribute generation as normal
+        // materialization. Apply it privately first, then reopen to avoid cached
+        // attributes from a preceding accepted/rejected generation. An attribute
+        // link must not become an indirect read outside the admitted source.
+        let attribute_paths: BTreeSet<_> = affected
+            .iter()
+            .filter(|p| p.file_name().is_some_and(|name| name == ".gitattributes"))
+            .cloned()
+            .collect();
+        let repo = if attribute_paths.is_empty() {
+            repo
+        } else {
+            git::validate_attribute_inputs(&self.source, &attribute_paths).whatever_context(
+                "unsafe tracked attribute configuration; last-good input retained",
+            )?;
+            let removed_attributes = attribute_paths.difference(&current).cloned().collect();
+            let eligible_attributes = attribute_paths.intersection(&current).cloned().collect();
+            git::sync_materialized_paths(
+                &self._scratch.path().join("absent-source"),
+                &self.stage,
+                &removed_attributes,
+            )
+            .whatever_context("unable to remove obsolete source attributes")?;
+            git::sync_materialized_paths(&self.source, &self.stage, &eligible_attributes)
+                .whatever_context("unable to stage current source attributes")?;
+            git::open_generated_repository(&self.stage)
+                .whatever_context("unable to reopen current attribute context")?
+        };
         let mut to_copy = affected.clone();
         for path in &affected {
             if let Some((expected_id, expected_mode)) = self.sibling_files.get(path) {

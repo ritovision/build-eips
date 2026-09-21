@@ -115,7 +115,8 @@ Use `build-eips doctor` when the workspace does not behave as expected. It check
 Build inputs must be self-contained: external source/static/theme link targets,
 Git-metadata links, cycles and unresolved links are rejected before rendering.
 Relative links to existing files/directories within the materialized input remain
-supported. Include external assets deliberately rather than linking a build to
+supported. Git attribute configuration (`.gitattributes`) must be ordinary
+files, not links or directories. Include external assets deliberately rather than linking a build to
 unrelated host files. A local absolute link back to the original checkout is not
 inside the generated input root.
 

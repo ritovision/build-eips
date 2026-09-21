@@ -40,6 +40,15 @@ fn inspect(
     active: &mut BTreeSet<PathBuf>,
     done: &mut BTreeSet<PathBuf>,
 ) -> io::Result<()> {
+    if path.file_name().is_some_and(|n| n == ".gitattributes") {
+        let meta = fs::symlink_metadata(path)?;
+        if !meta.is_file() || crate::generated_fs::is_link(&meta) {
+            return Err(rejected(
+                path,
+                "Git attribute configuration must be an ordinary file, not a link or directory",
+            ));
+        }
+    }
     let resolved = path
         .canonicalize()
         .map_err(|e| rejected(path, &format!("unresolvable input/link target ({e})")))?;

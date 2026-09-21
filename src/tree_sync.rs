@@ -20,7 +20,7 @@ fn invalid(path: &Path, why: &str) -> io::Error {
     )
 }
 
-fn inspect(root: &Path, relative: &Path) -> io::Result<Option<fs::Metadata>> {
+pub(crate) fn inspect(root: &Path, relative: &Path) -> io::Result<Option<fs::Metadata>> {
     if relative
         .components()
         .any(|c| !matches!(c, Component::Normal(_)))
