@@ -5,7 +5,7 @@
  */
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     ffi::OsStr,
     io::ErrorKind,
     path::{absolute, Path, PathBuf},
@@ -457,10 +457,11 @@ fn is_generated_path(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Stable repository-wide namespace used to reject tracked paths that cannot be
-/// represented uniquely on common case-insensitive filesystems. Normalize
-/// canonical Unicode equivalents and case before comparing every path prefix so
-/// directory collisions (Foo/a vs foo/b) are caught as well as leaf collisions.
+/// Stable repository-wide namespace used to reject tracked leaves that cannot
+/// be represented uniquely on common case-insensitive filesystems. Normalize
+/// canonical Unicode equivalents and case, then reject equal normalized leaf
+/// paths and file-vs-directory aliases. Case-only directory spellings are
+/// allowed when their descendant leaves remain distinct.
 fn portable_component_key(component: &OsStr) -> Result<String, Error> {
     let text = component.to_str().ok_or_else(|| {
         UpdateTreeSnafu {
@@ -475,10 +476,9 @@ fn portable_component_key(component: &OsStr) -> Result<String, Error> {
 pub(crate) fn validate_portable_paths<'a>(
     paths: impl IntoIterator<Item = &'a PathBuf>,
 ) -> Result<(), Error> {
-    let mut seen: BTreeMap<Vec<String>, PathBuf> = BTreeMap::new();
+    let mut keyed = Vec::new();
     for path in paths {
         let mut key = Vec::new();
-        let mut original = PathBuf::new();
         for component in path.components() {
             let std::path::Component::Normal(name) = component else {
                 return UpdateTreeSnafu {
@@ -489,22 +489,24 @@ pub(crate) fn validate_portable_paths<'a>(
                 }
                 .fail();
             };
-            original.push(name);
             key.push(portable_component_key(name)?);
-            if let Some(previous) = seen.get(&key) {
-                if previous != &original {
-                    return UpdateTreeSnafu {
-                        msg: format!(
-                            "tracked paths `{}` and `{}` collide on a case-insensitive filesystem",
-                            previous.display(),
-                            original.display()
-                        ),
-                    }
-                    .fail();
-                }
-            } else {
-                seen.insert(key.clone(), original.clone());
+        }
+        keyed.push((key, path.clone()));
+    }
+    keyed.sort_by(|left, right| left.0.cmp(&right.0));
+
+    for pair in keyed.windows(2) {
+        let (left_key, left_path) = &pair[0];
+        let (right_key, right_path) = &pair[1];
+        if right_key == left_key || right_key.starts_with(left_key) {
+            return UpdateTreeSnafu {
+                msg: format!(
+                    "tracked paths `{}` and `{}` collide on a case-insensitive filesystem",
+                    left_path.display(),
+                    right_path.display()
+                ),
             }
+            .fail();
         }
     }
     Ok(())
@@ -523,7 +525,9 @@ pub(crate) fn validate_portable_tree(tree: &Tree<'_>) -> Result<(), Error> {
             );
             return TreeWalkResult::Abort;
         };
-        paths.insert(PathBuf::from(format!("{prefix}{name}")));
+        if entry.kind() != Some(ObjectType::Tree) {
+            paths.insert(PathBuf::from(format!("{prefix}{name}")));
+        }
         TreeWalkResult::Ok
     });
     if let Some(error) = walk_error {
@@ -2110,7 +2114,8 @@ mod tests {
     fn portable_namespace_rejects_case_unicode_and_parent_collisions() {
         for paths in [
             vec![PathBuf::from("A.md"), PathBuf::from("a.md")],
-            vec![PathBuf::from("Foo/a.md"), PathBuf::from("foo/b.md")],
+            vec![PathBuf::from("Foo"), PathBuf::from("foo/b.md")],
+            vec![PathBuf::from("Foo/A.md"), PathBuf::from("foo/a.md")],
             vec![PathBuf::from("Ä.md"), PathBuf::from("ä.md")],
             vec![PathBuf::from("é.md"), PathBuf::from("e\u{301}.md")],
         ] {
@@ -2119,8 +2124,12 @@ mod tests {
                 "expected collision for {paths:?}"
             );
         }
-        let distinct = vec![PathBuf::from("foo/a.md"), PathBuf::from("foo/b.md")];
-        super::validate_portable_paths(distinct.iter()).unwrap();
+        for distinct in [
+            vec![PathBuf::from("foo/a.md"), PathBuf::from("foo/b.md")],
+            vec![PathBuf::from("Foo/a.md"), PathBuf::from("foo/b.md")],
+        ] {
+            super::validate_portable_paths(distinct.iter()).unwrap();
+        }
     }
 
     #[test]
