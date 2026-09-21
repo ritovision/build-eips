@@ -156,6 +156,39 @@ def r04_shapes():
         finally:stopserver(proc,f)
 
 
+def r05():
+    for linked in (False,True):
+        w,r,t=fixture('theme-generations')
+        write(t/'templates/eip.html','<html>THEME_A {{ page.content | safe }}</html>')
+        write(t/'static/entry/child.txt','CHILD');write(t/'static/kept.txt','KEPT');commit(t)
+        git(t,'checkout','-qb','other');write(t/'templates/eip.html','<html>THEME_B {{ page.content | safe }}</html>')
+        git(t,'rm','-r','static/entry');write(t/'static/entry','FILE');commit(t);git(t,'checkout','-q','master')
+        if linked:
+            old=w/'theme-history';t.rename(old);git(old,'worktree','add','-b','linked',str(t))
+        proc,f,port=startserver(w,r)
+        try:
+            assert 'THEME_A' in http(port,'/1/')[1]
+            initial_branch=git(t,'branch','--show-current')
+            for branch,marker,asset,value in [('other','THEME_B','/entry','FILE'),(initial_branch,'THEME_A','/entry/child.txt','CHILD')]:
+                git(t,'checkout','-q',branch)
+                eventually(lambda:marker in http(port,'/1/')[1] and http(port,asset)==(200,value),w,'clean theme branch/shape not reflected in HTTP')
+            asset=t/'static/new.txt';write(asset,'NEW_THEME');git(t,'add','static/new.txt')
+            index=Path(git(t,'rev-parse','--path-format=absolute','--git-path','index'));before=index.read_bytes()
+            eventually(lambda:http(port,'/new.txt')==(200,'NEW_THEME'),w,'theme staging not published')
+            assert index.read_bytes()==before
+            git(t,'reset','-q','HEAD','--','static/new.txt')
+            eventually(lambda:http(port,'/new.txt')[0]==404 and not (w/'generated/repo/themes/eips-theme/static/new.txt').exists(),w,'unstaged theme asset remains published')
+            assert asset.read_text()=='NEW_THEME'
+            (t/'static/kept.txt').unlink()
+            eventually(lambda:http(port,'/kept.txt')[0]==404,w,'theme deletion not reflected')
+            git(t,'restore','static/kept.txt')
+            eventually(lambda:http(port,'/kept.txt')==(200,'KEPT'),w,'theme restoration not reflected')
+            write(t/'templates/eip.html','<html>FINAL_THEME {{ page.content | safe }}</html>')
+            eventually(lambda:'FINAL_THEME' in http(port,'/1/')[1],w,'theme did not recover after transitions')
+            record('R05-theme-generations-'+('linked' if linked else 'ordinary'),w)
+        finally:stopserver(proc,f)
+
+
 if __name__=='__main__':
     if os.name!='posix':raise SystemExit('Native Windows acceptance is separate from this POSIX process harness.')
     parser=argparse.ArgumentParser();parser.add_argument('--build-eips',type=Path,required=True);parser.add_argument('--evidence',type=Path,required=True);parser.add_argument('--cases',nargs='+',default=['r01'])

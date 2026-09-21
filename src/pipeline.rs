@@ -31,8 +31,6 @@ fn prepare_theme_for_zola(
         .whatever_context("unsafe theme mount destination")?;
     git::materialize_working_tree(&theme_path, &mounted_theme_dir)
         .whatever_context("unable to materialize workspace-local theme")?;
-    let theme_index_path = git::index_path(&theme_path)
-        .whatever_context("unable to resolve workspace-local theme Git index path")?;
 
     Ok((
         mounted_theme_dir.clone(),
@@ -40,7 +38,6 @@ fn prepare_theme_for_zola(
             owned_root: repo_path.to_path_buf(),
             theme_source_root: theme_path,
             mounted_theme_dir,
-            theme_index_path,
         },
     ))
 }
@@ -396,7 +393,9 @@ mod tests {
         );
         assert_eq!(sync.theme_source_root, theme_root);
         assert_eq!(sync.mounted_theme_dir, mounted_theme_dir);
-        assert!(sync.theme_index_path.ends_with(".git/index"));
+        assert!(crate::git::index_path(&sync.theme_source_root)
+            .unwrap()
+            .is_file());
     }
 
     #[test]

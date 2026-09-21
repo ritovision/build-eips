@@ -10,6 +10,7 @@
 //! into the live tree. This is not an atomic multi-file Zola publication protocol.
 
 use crate::{
+    generation::{file_stamps, source_stamp, Snapshot},
     git, markdown,
     proposal::{OnlyRenderPlan, ProposalNumber},
 };
@@ -20,7 +21,6 @@ use snafu::{OptionExt, ResultExt, Whatever};
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
-    time::SystemTime,
 };
 
 pub(crate) struct LiveSource {
@@ -59,44 +59,6 @@ fn tree_files(repo: &Repository, commit: Oid) -> Result<BTreeMap<PathBuf, (Oid, 
     })
     .whatever_context("unable to inventory source tree")?;
     Ok(paths)
-}
-
-fn source_stamp(source: &Path) -> Result<(Oid, Oid), Whatever> {
-    let repo =
-        git::open_usable_repository(source).whatever_context("unable to open active source")?;
-    let head = git::head_commit_id(&repo).whatever_context("unable to resolve active HEAD")?;
-    let index = git::index_path(source).whatever_context("unable to resolve active index")?;
-    let bytes = std::fs::read(&index).whatever_context("unable to read active index")?;
-    Ok((
-        head,
-        Oid::hash_object(ObjectType::Blob, &bytes)
-            .whatever_context("unable to fingerprint active index")?,
-    ))
-}
-
-fn file_stamps(
-    source: &Path,
-    paths: &BTreeSet<PathBuf>,
-) -> Result<Vec<Option<(u64, SystemTime)>>, Whatever> {
-    paths
-        .iter()
-        .map(|path| match std::fs::symlink_metadata(source.join(path)) {
-            Ok(meta) => Ok(Some((
-                meta.len(),
-                meta.modified()
-                    .whatever_context("unable to timestamp source file")?,
-            ))),
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) =>
-            {
-                Ok(None)
-            }
-            Err(error) => Err(error).whatever_context("unable to inspect active source path"),
-        })
-        .collect()
 }
 
 impl LiveSource {
@@ -186,14 +148,11 @@ impl LiveSource {
 
     fn synchronize_inner(&mut self, force: bool) -> Result<usize, Whatever> {
         self.configuration.verify()?;
-        let stamp = source_stamp(&self.source)?;
-        let dirty: BTreeSet<_> = git::working_tree_paths(&self.source)
-            .whatever_context("unable to read active dirty paths")?
-            .into_iter()
-            .collect();
-        let mut current = git::tracked_paths(&self.source, |path| !path.starts_with("build"))
-            .whatever_context("unable to inventory active tracked paths")?;
-        current.extend(dirty.iter().cloned());
+        let Snapshot {
+            stamp,
+            paths: current,
+            dirty,
+        } = Snapshot::capture(&self.source, true)?;
         let head_changed = stamp.0 != self.previous_head;
         let inventory_changed = current != self.previous_paths;
         let mut affected: BTreeSet<_> = self.previous_dirty.union(&dirty).cloned().collect();
