@@ -259,6 +259,50 @@ def theme_config_gate():
     finally:stopserver(proc,f)
 
 
+def g01_case_collisions():
+    # Fresh active source: Linux must reject the same tree that native Windows
+    # cannot faithfully check out.
+    w,r,t=fixture('portable-case-active')
+    write(r/'static/Case.txt','UPPER');write(r/'static/case.txt','lower');commit(r)
+    result=runbuild(w,r)
+    assert result.returncode!=0 and 'case-insensitive filesystem' in result.stdout,result.stdout
+    record('G01-active-case-collision',w,exit=result.returncode)
+
+    # Sibling insertion must not create a collision that the active repo did not
+    # contain by itself.
+    w,r,t=fixture('portable-case-sibling');sib=w/'ERCs'
+    write(sib/'content/Case.txt','UPPER');write(sib/'content/case.txt','lower')
+    write(sib/'Build.toml',manifest(sib,'ERCs',t,git(t,'rev-parse','HEAD')));initgit(sib)
+    write(r/'Build.toml',manifest(r,'EIPs',t,git(t,'rev-parse','HEAD'),{'ERCs':sib}));commit(r)
+    result=runbuild(w,r)
+    assert result.returncode!=0 and 'case-insensitive filesystem' in result.stdout,result.stdout
+    record('G01-sibling-case-collision',w,exit=result.returncode)
+
+    # Editable themes use the same portable namespace before materialization.
+    w,r,t=fixture('portable-case-theme')
+    write(t/'static/Case.txt','UPPER');write(t/'static/case.txt','lower');commit(t)
+    result=runbuild(w,r)
+    assert result.returncode!=0 and 'case-insensitive filesystem' in result.stdout,result.stdout
+    record('G01-theme-case-collision',w,exit=result.returncode)
+
+    # Live serve rejects a newly staged collision, retains last-good output, and
+    # recovers when one member leaves tracked membership.
+    w,r,t=fixture('portable-case-live')
+    proc,f,port=startserver(w,r)
+    try:
+        initial=http(port,'/1/')[1]
+        write(r/'static/Case.txt','UPPER');write(r/'static/case.txt','lower')
+        git(r,'add','static/Case.txt','static/case.txt')
+        eventually(lambda:'case-insensitive filesystem' in (w/'serve.log').read_text(),w,'live case collision not rejected')
+        assert http(port,'/1/')[1]==initial
+        git(r,'reset','-q','HEAD','--','static/case.txt')
+        write(r/'content/00001.md',md(1,'CASE COLLISION RECOVERED'))
+        eventually(lambda:'CASE COLLISION RECOVERED' in http(port,'/1/')[1] and http(port,'/Case.txt')==(200,'UPPER'),w,'live case collision did not recover')
+        assert http(port,'/case.txt')[0]==404, 'unstaged case-colliding twin was published'
+        record('G01-live-case-collision-recovery',w)
+    finally:stopserver(proc,f)
+
+
 def r04_normalization():
     w,r,t=fixture('native-git-normalization');sib=w/'ERCs'
     original='content/shared.txt text eol=crlf\n'

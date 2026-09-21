@@ -5,7 +5,7 @@
  */
 
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     ffi::OsStr,
     io::ErrorKind,
     path::{absolute, Path, PathBuf},
@@ -23,6 +23,7 @@ use git2::{
 };
 use log::{debug, info};
 use snafu::{ensure, Backtrace, IntoError, OptionExt, ResultExt, Snafu};
+use unicode_normalization::UnicodeNormalization;
 use url::Url;
 
 const DIRTY_PATH_DISPLAY_LIMIT: usize = 10;
@@ -360,6 +361,18 @@ fn clone_missing_repo_with_pin(
             what: "clone staged workspace repository",
         })?;
         ensure_usable_workspace_repository(&repository, &staged_repo)?;
+        if pin.is_none() {
+            let head = repository
+                .head()
+                .and_then(|head| head.peel_to_commit())
+                .context(GitSnafu {
+                    what: "read staged workspace repository HEAD",
+                })?;
+            let tree = head.tree().context(GitSnafu {
+                what: "read staged workspace repository tree",
+            })?;
+            validate_portable_tree(&tree)?;
+        }
     }
     if let Some(commit) = pin {
         checkout_fresh_clone_at_commit(&staged_repo, url, commit).map_err(|error| {
@@ -418,6 +431,11 @@ pub fn checkout_fresh_clone_at_commit(
         }
     };
 
+    let tree = commit.tree().context(GitSnafu {
+        what: "read manifest theme tree",
+    })?;
+    validate_portable_tree(&tree)?;
+
     repository
         .set_head_detached(commit.id())
         .context(GitSnafu {
@@ -437,6 +455,125 @@ fn is_generated_path(path: &Path) -> bool {
         .next()
         .map(|component| component.as_os_str() == OsStr::new(BUILD_DIR))
         .unwrap_or(false)
+}
+
+/// Stable repository-wide namespace used to reject tracked paths that cannot be
+/// represented uniquely on common case-insensitive filesystems. Normalize
+/// canonical Unicode equivalents and case before comparing every path prefix so
+/// directory collisions (Foo/a vs foo/b) are caught as well as leaf collisions.
+fn portable_component_key(component: &OsStr) -> Result<String, Error> {
+    let text = component.to_str().ok_or_else(|| {
+        UpdateTreeSnafu {
+            msg: String::from("tracked paths must be UTF-8 for cross-platform portability"),
+        }
+        .build()
+    })?;
+    let lowered: String = text.nfc().flat_map(|c| c.to_lowercase()).collect();
+    Ok(lowered.nfc().collect())
+}
+
+pub(crate) fn validate_portable_paths<'a>(
+    paths: impl IntoIterator<Item = &'a PathBuf>,
+) -> Result<(), Error> {
+    let mut seen: BTreeMap<Vec<String>, PathBuf> = BTreeMap::new();
+    for path in paths {
+        let mut key = Vec::new();
+        let mut original = PathBuf::new();
+        for component in path.components() {
+            let std::path::Component::Normal(name) = component else {
+                return UpdateTreeSnafu {
+                    msg: format!(
+                        "tracked path `{}` contains a non-portable component",
+                        path.display()
+                    ),
+                }
+                .fail();
+            };
+            original.push(name);
+            key.push(portable_component_key(name)?);
+            if let Some(previous) = seen.get(&key) {
+                if previous != &original {
+                    return UpdateTreeSnafu {
+                        msg: format!(
+                            "tracked paths `{}` and `{}` collide on a case-insensitive filesystem",
+                            previous.display(),
+                            original.display()
+                        ),
+                    }
+                    .fail();
+                }
+            } else {
+                seen.insert(key.clone(), original.clone());
+            }
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_portable_tree(tree: &Tree<'_>) -> Result<(), Error> {
+    let mut paths = BTreeSet::new();
+    let mut walk_error = None;
+    let walk_result = tree.walk(git2::TreeWalkMode::PreOrder, |prefix, entry| {
+        let Some(name) = entry.name() else {
+            walk_error = Some(
+                UpdateTreeSnafu {
+                    msg: format!("non-UTF-8 tracked path below `{prefix}`"),
+                }
+                .build(),
+            );
+            return TreeWalkResult::Abort;
+        };
+        paths.insert(PathBuf::from(format!("{prefix}{name}")));
+        TreeWalkResult::Ok
+    });
+    if let Some(error) = walk_error {
+        return Err(error);
+    }
+    walk_result.context(GitSnafu {
+        what: "inventory tree for cross-platform path collisions",
+    })?;
+    validate_portable_paths(paths.iter())
+}
+
+/// Effective tracked working-tree membership after applying the same dirty
+/// overlay semantics used by materialization. Start from HEAD, remove every
+/// changed path (and descendants replaced by that path), then add back only
+/// changed leaves that physically exist as regular files or symlinks. This is
+/// intentionally not equivalent to the index alone: an unstaged rename can be
+/// materialized by dirty/live mode even though its destination is not in the
+/// index yet.
+fn effective_tracked_worktree_paths(root: &Path) -> Result<BTreeSet<PathBuf>, Error> {
+    let mut paths = tracked_paths(root, |_| true)?;
+    let (dirty, _) = collect_dirty_paths(root, |_| true)?;
+
+    for changed in &dirty {
+        paths.retain(|path| path != changed && !path.starts_with(changed));
+    }
+    for changed in &dirty {
+        match crate::tree_sync::inspect(root, changed).with_context(|_| IoSnafu {
+            path: root.join(changed),
+        })? {
+            Some(meta) if meta.is_file() || crate::generated_fs::is_link(&meta) => {
+                paths.insert(changed.clone());
+            }
+            Some(meta) if meta.is_dir() => {}
+            Some(_) => {
+                return DirtyUnsupportedPathSnafu {
+                    path: changed.clone(),
+                }
+                .fail()
+            }
+            None => {}
+        }
+    }
+    Ok(paths)
+}
+
+/// Validate the exact tracked membership that dirty/live materialization would
+/// publish, rather than merely HEAD or the index.
+pub(crate) fn validate_portable_worktree(root: &Path) -> Result<(), Error> {
+    let paths = effective_tracked_worktree_paths(root)?;
+    validate_portable_paths(paths.iter())
 }
 
 fn dirty_statuses(repo: &git2::Repository) -> Result<git2::Statuses<'_>, Error> {
@@ -583,6 +720,7 @@ pub fn tracked_working_tree_paths(root_path: &Path) -> Result<Vec<PathBuf>, Erro
 }
 
 pub fn materialize_working_tree(source_root: &Path, destination_root: &Path) -> Result<(), Error> {
+    validate_portable_worktree(source_root)?;
     remove_existing_path(destination_root).with_context(|_| IoSnafu {
         path: destination_root.to_path_buf(),
     })?;
@@ -681,6 +819,7 @@ pub(crate) fn tracked_paths(
         what: "peel head to commit",
     })?;
     let tree = commit.tree().context(GitSnafu { what: "head tree" })?;
+    validate_portable_tree(&tree)?;
     let mut paths = BTreeSet::new();
     let mut walk_error = None;
 
@@ -1134,6 +1273,7 @@ impl Fresh {
         source_materialization: SourceMaterialization,
     ) -> Result<Self, Error> {
         let root_path = absolute(root_path).with_context(|_| IoSnafu { path: root_path })?;
+        validate_portable_worktree(&root_path)?;
         if source_materialization == SourceMaterialization::Clean {
             check_dirty(&root_path)?;
         }
@@ -1169,6 +1309,13 @@ impl Fresh {
             self.src_repo_url.as_str(),
             "+HEAD:refs/build-eips/source-head",
         )?;
+        {
+            let master_tree = master.tree().context(GitSnafu {
+                what: "read active source tree",
+            })?;
+            validate_portable_tree(&master_tree)?;
+        }
+
         self.working_repo
             .set_head_detached(master.id())
             .context(GitSnafu { what: "detach" })?;
@@ -1481,6 +1628,7 @@ fn merge_sibling_repositories(
             .create_updated(working_repo, &local_tree)
             .context(GitSnafu { what: "build tree" })?;
         let merged_tree = working_repo.find_tree(merged_tree_oid).unwrap();
+        validate_portable_tree(&merged_tree)?;
 
         check_ignored(working_repo, &merged_tree)?;
 
@@ -1956,6 +2104,96 @@ mod tests {
         assert!(super::validate_sibling_identity(&child, "ERCs").is_err());
         write_file(&path, "Build.toml", "malformed");
         assert!(super::validate_sibling_identity(&path, "ERCs").is_err());
+    }
+
+    #[test]
+    fn portable_namespace_rejects_case_unicode_and_parent_collisions() {
+        for paths in [
+            vec![PathBuf::from("A.md"), PathBuf::from("a.md")],
+            vec![PathBuf::from("Foo/a.md"), PathBuf::from("foo/b.md")],
+            vec![PathBuf::from("Ä.md"), PathBuf::from("ä.md")],
+            vec![PathBuf::from("é.md"), PathBuf::from("e\u{301}.md")],
+        ] {
+            assert!(
+                super::validate_portable_paths(paths.iter()).is_err(),
+                "expected collision for {paths:?}"
+            );
+        }
+        let distinct = vec![PathBuf::from("foo/a.md"), PathBuf::from("foo/b.md")];
+        super::validate_portable_paths(distinct.iter()).unwrap();
+    }
+
+    #[test]
+    fn tracked_case_collisions_fail_on_case_sensitive_hosts_but_case_rename_is_valid() {
+        let temp = TempDir::new().unwrap();
+        let root = temp.path().join("source");
+        let repo = init_repo(&root, &[("A.md", "upper\n"), ("a.md", "lower\n")]);
+        let error = super::validate_portable_worktree(&root).unwrap_err();
+        assert!(error.to_string().contains("case-insensitive filesystem"));
+        let tree = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
+        assert!(super::validate_portable_tree(&tree).is_err());
+        drop(tree);
+
+        let rename = temp.path().join("rename");
+        let repo = init_repo(&rename, &[("A.md", "value\n")]);
+        std::fs::rename(rename.join("A.md"), rename.join("a.md")).unwrap();
+        let mut index = repo.index().unwrap();
+        index.remove_path(Path::new("A.md")).unwrap();
+        index.add_path(Path::new("a.md")).unwrap();
+        index.write().unwrap();
+        super::validate_portable_worktree(&rename).unwrap();
+
+        let collision = temp.path().join("unstaged-rename-collision");
+        init_repo(&collision, &[("A.md", "upper\n"), ("B.md", "other\n")]);
+        std::fs::rename(collision.join("B.md"), collision.join("a.md")).unwrap();
+        let error = super::validate_portable_worktree(&collision).unwrap_err();
+        assert!(
+            error.to_string().contains("case-insensitive filesystem"),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn workspace_clone_validates_the_selected_tree_without_rejecting_a_safe_pin() {
+        let temp = TempDir::new().unwrap();
+        let source = temp.path().join("source");
+        let repo = init_repo(&source, &[("A.md", "safe\n")]);
+        let safe = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id()
+            .to_string();
+        write_file(&source, "a.md", "collision\n");
+        commit_all(&repo, "colliding default head");
+
+        let unpinned = temp.path().join("workspace/unpinned");
+        let error = super::clone_missing_repo(file_url(&source).as_str(), &unpinned).unwrap_err();
+        assert!(error.to_string().contains("case-insensitive filesystem"));
+        assert!(!unpinned.exists());
+
+        let pinned = temp.path().join("workspace/pinned");
+        super::clone_missing_repo_at_commit(file_url(&source).as_str(), &pinned, &safe).unwrap();
+        let checked_out = Repository::open(&pinned).unwrap();
+        assert_eq!(
+            checked_out
+                .head()
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+                .to_string(),
+            safe
+        );
+        assert!(pinned.join("A.md").is_file());
+        assert!(!pinned.join("a.md").exists());
     }
 
     #[test]

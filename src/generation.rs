@@ -22,6 +22,8 @@ pub(crate) struct Snapshot {
 }
 impl Snapshot {
     pub(crate) fn capture(root: &Path, active: bool) -> Result<Self, Whatever> {
+        git::validate_portable_worktree(root)
+            .whatever_context("tracked source paths are not cross-platform portable")?;
         let stamp = source_stamp(root)?;
         let dirty: BTreeSet<_> = if active {
             git::working_tree_paths(root)
