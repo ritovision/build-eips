@@ -5,14 +5,14 @@
  */
 
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     io::{BufRead, BufReader, ErrorKind},
     path::{Path, PathBuf},
 };
 
 use log::{debug, error, info, warn};
 use semver::Version;
-use snafu::{ensure, Backtrace, IntoError, Report, ResultExt, Snafu};
+use snafu::{ensure, Backtrace, IntoError, OptionExt, Report, ResultExt, Snafu};
 use url::Url;
 
 use crate::{
@@ -78,6 +78,8 @@ pub enum Error {
         "installed zola version is too old (requires at least {MINIMUM_VERSION}, got {got})"
     ))]
     TooOld { got: Version, backtrace: Backtrace },
+    #[snafu(display("unexpected zola --version output: {output:?}"))]
+    VersionOutput { output: String },
     #[snafu(context(false))]
     Semver { source: semver::Error },
     #[snafu(display("i/o error"))]
@@ -94,21 +96,33 @@ pub enum Error {
 }
 
 pub fn find_zola() -> Result<(), Error> {
-    let text = match duct::cmd!("zola", "--version").stdin_null().read() {
+    probe_zola(OsStr::new("zola")).map(|_| ())
+}
+
+/// Probe the same executable doctor resolved, without changing PATH globally.
+pub(crate) fn probe_zola(binary: &OsStr) -> Result<Version, Error> {
+    let text = match duct::cmd(binary, ["--version"]).stdin_null().read() {
         Ok(t) => t,
         Err(e) if e.kind() == ErrorKind::NotFound => return Err(MissingSnafu.into_error(e)),
         Err(e) => return Err(IoSnafu.into_error(e)),
     };
 
+    validate_version_output(&text)
+}
+
+fn validate_version_output(text: &str) -> Result<Version, Error> {
     let version_text = text
+        .trim()
         .strip_prefix("zola ")
-        .expect("weird zola output")
+        .context(VersionOutputSnafu {
+            output: text.to_owned(),
+        })?
         .trim();
     let version: Version = version_text.parse()?;
 
     ensure!(version >= MINIMUM_VERSION, TooOldSnafu { got: version });
 
-    Ok(())
+    Ok(version)
 }
 
 pub fn check(theme_dir: &Path, project_path: &Path) -> Result<(), Error> {
@@ -418,5 +432,42 @@ mod tests {
             fs::read_to_string(theme_config_path(&mounted_theme)).unwrap(),
             "title = 'source'\n"
         );
+    }
+}
+
+#[cfg(test)]
+mod readiness_regressions {
+    use super::*;
+    #[test]
+    fn version_policy_is_explicit_and_malformed_output_is_not_a_panic() {
+        for text in ["zola 0.22.1", "zola 0.23.0\r\n", "zola 1.0.0"] {
+            assert!(validate_version_output(text).is_ok(), "{text}");
+        }
+        for text in [
+            "zola 0.1.0",
+            "zola 0.22.1-alpha",
+            "",
+            "surprise",
+            "zola not-a-version",
+        ] {
+            assert!(validate_version_output(text).is_err(), "{text}");
+        }
+    }
+    #[cfg(unix)]
+    #[test]
+    fn probe_checks_process_status_and_exact_executable() {
+        use std::os::unix::fs::PermissionsExt;
+        let temp = tempfile::tempdir().unwrap();
+        let binary = temp.path().join("zola");
+        for (body, success) in [
+            ("echo 'zola 0.22.1'", true),
+            ("echo 'zola 0.1.0'", false),
+            ("echo surprise", false),
+            ("echo 'zola 0.22.1'; exit 7", false),
+        ] {
+            std::fs::write(&binary, format!("#!/bin/sh\n{body}\n")).unwrap();
+            std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
+            assert_eq!(probe_zola(binary.as_os_str()).is_ok(), success, "{body}");
+        }
     }
 }

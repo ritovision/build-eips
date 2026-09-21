@@ -623,11 +623,25 @@ fn collect_doctor_report(args: &Args, check_tools: bool) -> Result<DoctorReport,
             "git",
             "workspace bootstrap and build-eips commands expect git to be available",
         );
-        check_tool(
+        if check_tool(
             &mut report,
             "zola",
-            "build, check, and serve commands need a working zola binary",
-        );
+            "build, check, and serve need a compatible Zola",
+        ) {
+            // Do not equate executable presence with runtime compatibility.
+            if let Some(path) = command_path("zola") {
+                match crate::zola::probe_zola(path.as_os_str()) {
+                    Ok(version) => report.record(
+                        DoctorStatus::Ok,
+                        format!("Zola {version} meets the runtime version requirement"),
+                    ),
+                    Err(error) => report.record(
+                        DoctorStatus::Fail,
+                        format!("Zola is not runtime-ready: {}", Report::from_error(error)),
+                    ),
+                }
+            }
+        }
         check_front_door_setup_tools(&mut report);
     }
 
