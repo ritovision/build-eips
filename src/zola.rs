@@ -5,12 +5,13 @@
  */
 
 use std::{
+    collections::VecDeque,
     ffi::{OsStr, OsString},
     io::{BufRead, BufReader, ErrorKind},
     path::{Path, PathBuf},
 };
 
-use log::{debug, error, info, warn};
+use log::{debug, info, Level};
 use semver::Version;
 use snafu::{ensure, Backtrace, IntoError, OptionExt, Report, ResultExt, Snafu};
 use url::Url;
@@ -69,6 +70,12 @@ fn mount_theme(theme_dir: &Path, project_path: &Path) -> Result<PathBuf, std::io
 
 #[derive(Debug, Snafu)]
 pub enum Error {
+    #[snafu(display("zola {command} failed ({status}):\n{diagnostics}"))]
+    Failed {
+        command: String,
+        status: std::process::ExitStatus,
+        diagnostics: String,
+    },
     #[snafu(display("could not find zola binary (requires at least version {MINIMUM_VERSION})"))]
     Missing {
         backtrace: Backtrace,
@@ -228,6 +235,25 @@ fn remove_output(output_path: &Path) {
     }
 }
 
+// Zola 0.22.1 uses uppercase severity tokens. Match tokens, not words such as
+// WARNING_COUNT; retain the older colon form without changing global logging.
+fn classify_output_line(line: &str) -> (Level, &str) {
+    let line = line.trim();
+    for (prefix, level) in [
+        ("ERROR", Level::Error),
+        ("WARN", Level::Warn),
+        ("Error:", Level::Error),
+        ("Warning:", Level::Warn),
+    ] {
+        if let Some(rest) = line.strip_prefix(prefix) {
+            if rest.is_empty() || rest.starts_with(char::is_whitespace) || rest.starts_with(':') {
+                return (level, rest.trim_start_matches(':').trim());
+            }
+        }
+    }
+    (Level::Info, line)
+}
+
 fn spawn_log<U, I>(theme_dir: &Path, project_path: &Path, args: U) -> Result<(), Error>
 where
     U: IntoIterator<Item = I>,
@@ -246,38 +272,48 @@ where
     crate::source_reads::validate_tree(project_path).context(FsSnafu { path: project_path })?;
     let config_path = theme_config_path(&mounted_theme_path);
 
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let command = args.first().map(|arg| arg.to_string_lossy().into_owned()).unwrap_or_default();
     let prefix = [OsString::from("-c"), config_path.into()].into_iter();
-    let args = prefix.chain(args.into_iter().map(Into::into));
+    let args = prefix.chain(args);
     let reader = duct::cmd("zola", args)
         .dir(project_path)
         .stdin_null()
         .stderr_to_stdout()
+        .unchecked()
         .reader()
         .context(IoSnafu)?;
 
     let mut buf = BufReader::new(reader);
     let mut line = String::new();
+    let mut diagnostics = VecDeque::new();
 
-    while buf.read_line(&mut line).context(IoSnafu)? > 0 {
+    loop {
+        line.clear();
+        if buf.read_line(&mut line).context(IoSnafu)? == 0 {
+            break;
+        }
         let trimmed = line.trim();
         if trimmed.is_empty() {
             continue;
         }
-
-        if let Some(warning) = trimmed.strip_prefix("Warning: ") {
-            warn!("{}", warning);
-        } else if let Some(error) = trimmed.strip_prefix("Error: ") {
-            error!("{}", error);
-        } else {
-            info!("{}", trimmed);
+        let (level, message) = classify_output_line(trimmed);
+        log::log!(level, "{}", message);
+        // Keep continuation lines too: Zola often puts the useful cause or
+        // conflicting paths after the ERROR heading. Bound memory during serve.
+        if diagnostics.len() == 20 {
+            diagnostics.pop_front();
         }
-        line.clear();
+        diagnostics.push_back(trimmed.to_owned());
     }
 
-    buf.into_inner()
-        .try_wait()
-        .context(IoSnafu)?
-        .expect("zola should have exited");
+    let reader = buf.into_inner();
+    let output = reader.try_wait().context(IoSnafu)?.expect("zola should have exited");
+    ensure!(output.status.success(), FailedSnafu {
+        command,
+        status: output.status,
+        diagnostics: diagnostics.into_iter().collect::<Vec<_>>().join("\n"),
+    });
 
     Ok(())
 }
@@ -501,5 +537,45 @@ mod readiness_regressions {
             std::fs::set_permissions(&binary, std::fs::Permissions::from_mode(0o755)).unwrap();
             assert_eq!(probe_zola(binary.as_os_str()).is_ok(), success, "{body}");
         }
+    }
+}
+
+#[cfg(test)]
+mod diagnostic_regressions {
+    use super::*;
+
+    #[test]
+    fn recognizes_zola_severity_tokens_without_false_positives() {
+        for (line, expected, message) in [
+            ("ERROR Found path collisions", Level::Error, "Found path collisions"),
+            ("WARN: missing image", Level::Warn, "missing image"),
+            ("  WARN missing image  ", Level::Warn, "missing image"),
+            ("ERROR", Level::Error, ""),
+            ("Warning: old form", Level::Warn, "old form"),
+            ("Error: old form", Level::Error, "old form"),
+            ("WARNING_COUNT", Level::Info, "WARNING_COUNT"),
+            ("ERRORS are counted", Level::Info, "ERRORS are counted"),
+            ("Done in 20ms.", Level::Info, "Done in 20ms."),
+            ("\n", Level::Info, ""),
+        ] {
+            assert_eq!(classify_output_line(line), (expected, message));
+        }
+    }
+
+    #[test]
+    fn nonzero_zola_exit_preserves_meaningful_diagnostics() {
+        if find_zola().is_err() { return; }
+        let temp = tempfile::tempdir().unwrap();
+        let project = temp.path().join("project");
+        let theme = mounted_theme_path(&project);
+        std::fs::create_dir_all(theme.join("config")).unwrap();
+        std::fs::create_dir_all(project.join("content")).unwrap();
+        std::fs::write(theme_config_path(&theme), "base_url = 'https://example.test/'\n").unwrap();
+        std::fs::write(project.join("content/_index.md"), "+++\ntitle = 'Failure'\n+++\n[Missing](@/missing.md)\n").unwrap();
+        let error = check(&theme, &project).unwrap_err();
+        assert!(matches!(error, Error::Failed { .. }), "{error}");
+        let text = error.to_string();
+        assert!(text.contains("zola check failed"), "{text}");
+        assert!(text.contains("missing.md"), "{text}");
     }
 }

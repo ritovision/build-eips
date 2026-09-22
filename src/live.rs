@@ -83,16 +83,30 @@ fn is_hardfork_meta_eip_path(source_root: &Path, repo_relative_path: &Path) -> b
         .unwrap_or(false)
 }
 
-fn warn_for_changed_hardfork_meta_eips(source_root: &Path, affected_paths: &BTreeSet<PathBuf>) {
-    for path in affected_paths
-        .iter()
-        .filter(|path| is_hardfork_meta_eip_path(source_root, path))
-    {
-        log::warn!(
-            "edit detected in hardfork Meta EIP `{}`; restart `build-eips serve` to refresh /hardforks/ and member EIP rows",
-            path.to_string_lossy()
-        );
+fn changed_hardfork_meta_eip_paths(
+    repo: &Repository,
+    source_root: &Path,
+    previous: &git2::Tree<'_>,
+    candidate: &git2::Tree<'_>,
+) -> Result<BTreeSet<PathBuf>, Whatever> {
+    let diff = repo.diff_tree_to_tree(Some(previous), Some(candidate), None)
+        .whatever_context("unable to inspect changed hardfork source paths")?;
+    let mut paths = BTreeSet::new();
+    for delta in diff.deltas() {
+        for path in [delta.old_file().path(), delta.new_file().path()].into_iter().flatten() {
+            let is_proposal = path.strip_prefix(CONTENT_DIR).ok()
+                .and_then(proposal_number_from_content_markdown_path).is_some();
+            if !is_proposal { continue; }
+            let previously_marked = previous.get_path(path).ok()
+                .and_then(|entry| repo.find_blob(entry.id()).ok())
+                .is_some_and(|blob| std::str::from_utf8(blob.content()).is_ok_and(
+                    network_upgrades::markdown_has_network_upgrade_marker));
+            if is_hardfork_meta_eip_path(source_root, path) || previously_marked {
+                paths.insert(path.to_path_buf());
+            }
+        }
     }
+    Ok(paths)
 }
 
 impl LiveSource {
@@ -204,7 +218,6 @@ impl LiveSource {
         if affected.is_empty() {
             return Ok(0);
         }
-        warn_for_changed_hardfork_meta_eips(&self.source, &affected);
         self.pending.extend(affected.iter().cloned());
         let files_before = file_stamps(&self.source, &affected)?;
         let repo = git::open_generated_repository(&self.stage)
@@ -346,6 +359,17 @@ impl LiveSource {
             self.pending.clear();
             return Ok(0);
         }
+        // Forced initialization and HEAD-only changes are not edits. Warn only
+        // for actual raw changes against the last accepted input, not `affected`.
+        // This restart advice remains necessary until DEC-003 is implemented.
+        let previous_tree = repo.find_tree(self.last_good_tree)
+            .whatever_context("unable to inspect accepted raw input")?;
+        for path in changed_hardfork_meta_eip_paths(&repo, &self.stage, &previous_tree, &tree)? {
+            log::warn!(
+                "edit detected in hardfork Meta EIP `{}`; restart `build-eips serve` to refresh /hardforks/ and member EIP rows",
+                path.to_string_lossy()
+            );
+        }
         let source_parent = repo
             .find_commit(stamp.0)
             .whatever_context("source HEAD moved during preparation; retry")?;
@@ -443,5 +467,38 @@ impl LiveSource {
             publish.len()
         );
         Ok(publish.len())
+    }
+}
+
+#[cfg(test)]
+mod warning_regressions {
+    use super::*;
+
+    #[test]
+    fn warnings_follow_real_raw_meta_changes_not_forced_inventory() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path();
+        let repo = Repository::init(root).unwrap();
+        std::fs::create_dir(root.join("content")).unwrap();
+        std::fs::write(root.join("content/07568.md"), "Meta body\n").unwrap();
+        std::fs::write(root.join("content/90000.md"), "---\neip: 90000\nnetwork-upgrade: Fixture\n---\nBody\n").unwrap();
+        std::fs::write(root.join("content/00020.md"), "Ordinary body\n").unwrap();
+        let snapshot = || {
+            let mut index = repo.index().unwrap();
+            index.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
+            index.write().unwrap();
+            repo.find_tree(index.write_tree().unwrap()).unwrap()
+        };
+        let original = snapshot();
+        assert!(changed_hardfork_meta_eip_paths(&repo, root, &original, &original).unwrap().is_empty());
+        std::fs::write(root.join("content/00020.md"), "Ordinary edit\n").unwrap();
+        let ordinary = snapshot();
+        assert!(changed_hardfork_meta_eip_paths(&repo, root, &original, &ordinary).unwrap().is_empty());
+        std::fs::write(root.join("content/07568.md"), "Real Meta edit\n").unwrap();
+        // Removing an unregistered marker still needs restart advice.
+        std::fs::write(root.join("content/90000.md"), "---\neip: 90000\n---\nBody\n").unwrap();
+        let edited = snapshot();
+        let paths = changed_hardfork_meta_eip_paths(&repo, root, &original, &edited).unwrap();
+        assert_eq!(paths, BTreeSet::from([PathBuf::from("content/07568.md"), PathBuf::from("content/90000.md")]));
     }
 }
