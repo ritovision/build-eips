@@ -85,7 +85,7 @@ fn ensure_proposal_metadata_output_available(json_path: &Path) -> Result<(), Wha
     }
 }
 
-fn active_proposal_metadata_prefix(
+pub(crate) fn active_proposal_metadata_prefix(
     repository_title: &str,
 ) -> Result<ProposalCatalogPrefix, Whatever> {
     match repository_title {
@@ -578,7 +578,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_metadata_allows_eip_and_erc_keys_for_same_number() {
+    fn proposal_metadata_rejects_ambiguous_same_number_routes() {
         let temp = TempDir::new().unwrap();
         write_file(
             temp.path(),
@@ -591,12 +591,12 @@ mod tests {
             &metadata_proposal_markdown(20, "EIP 20", None, None),
         );
 
-        let metadata = write_metadata_json(temp.path(), "EIPs", None);
-        let proposals = metadata["proposals"].as_object().unwrap();
-
-        assert_eq!(proposals.len(), 2);
-        assert!(proposals.contains_key("eip-20"));
-        assert!(proposals.contains_key("erc-20"));
+        let error = write_proposal_metadata_json(temp.path(), "EIPs", None)
+            .unwrap_err().to_string();
+        for expected in ["proposal route collision", "/20/", "eip-20", "erc-20", "020.md", "20/index.md"] {
+            assert!(error.contains(expected), "{error}");
+        }
+        assert!(!temp.path().join("static/assets/data/proposals.json").exists());
     }
 
     #[test]

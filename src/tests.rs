@@ -607,3 +607,19 @@ fn normal_serve_after_only_restores_full_materialized_content_tree() {
     assert!(restored_repo_path.join("content/00555.md").is_file());
     assert!(restored_repo_path.join("content/00678.md").is_file());
 }
+
+#[test]
+fn unsupported_active_product_fails_before_runtime_preparation() {
+    let workspace = TempDir::new().unwrap();
+    let active_path = workspace.path().join("Core");
+    write_manifest_repo(&active_path, "Core", &file_url(&active_path), &[]);
+    std::fs::create_dir(workspace.path().join(config::DEFAULT_THEME_DIR)).unwrap();
+    write_file(workspace.path(), config::LOCAL_CONFIG_FILE, "");
+    let args = parse_args(&["build-eips", "-C", active_path.to_str().unwrap(), "build"]);
+    let resolved = resolve_execution(&args).unwrap();
+    let build_path = resolved.build_path.clone();
+    let error = crate::pipeline::Prepared::prepare(resolved).unwrap_err().to_string();
+    assert!(error.contains("unsupported active repository title `Core`"), "{error}");
+    assert!(error.contains("expected `EIPs` or `ERCs`"), "{error}");
+    assert!(!build_path.exists(), "invalid product must not materialize sources");
+}

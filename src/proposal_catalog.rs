@@ -541,6 +541,23 @@ fn insert_collected_proposal_catalog_record(
         );
     }
 
+    // EIP and ERC metadata keys differ, but both render at /N/. The admitted
+    // universe must be unambiguous even when a full build has no OnlyRenderPlan.
+    let other_prefix = match metadata.record.prefix {
+        ProposalCatalogPrefix::Eip => ProposalCatalogPrefix::Erc,
+        ProposalCatalogPrefix::Erc => ProposalCatalogPrefix::Eip,
+    };
+    if let Some(existing) = records.get(&other_prefix.key(metadata.record.number)) {
+        snafu::whatever!(
+            "proposal route collision at `/{}/`: `{}` from `{}` conflicts with `{}` from `{}`; proposal numbers must be unique in the merged render universe",
+            metadata.record.number,
+            existing.key,
+            existing.source_path.to_string_lossy(),
+            metadata.key,
+            metadata.source_path.to_string_lossy()
+        );
+    }
+
     records.insert(metadata.key.clone(), metadata);
     Ok(())
 }

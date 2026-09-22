@@ -178,6 +178,9 @@ fn run_search_corpus(
 
 impl Prepared {
     pub(crate) fn prepare(resolved: ResolvedExecution) -> Result<Self, Whatever> {
+        // Product policy belongs at the runtime boundary, before cloning or
+        // materializing sources. Workspace location plumbing remains generic.
+        proposal_metadata::active_proposal_metadata_prefix(&resolved.repository_use.title)?;
         zola::find_zola().whatever_context("unable to find suitable zola binary")?;
 
         let ResolvedExecution {
