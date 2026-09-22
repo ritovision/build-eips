@@ -14,7 +14,7 @@ use log::info;
 use snafu::{ResultExt, Whatever};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-use crate::config::ServerBinding;
+use crate::{config::ServerBinding, build_artifact::{BuildInfo, RECEIPT}};
 
 const INDEX_HTML: &str = "index.html";
 
@@ -26,6 +26,8 @@ pub fn serve(output_path: &Path, server_binding: &ServerBinding) -> Result<(), W
         );
     }
 
+    let info = BuildInfo::read(output_path)?;
+
     let server = match Server::http((server_binding.interface, server_binding.port)) {
         Ok(server) => server,
         Err(error) => {
@@ -34,8 +36,8 @@ pub fn serve(output_path: &Path, server_binding: &ServerBinding) -> Result<(), W
     };
 
     info!(
-        "serving static preview from `{}` at http://{server_binding}/",
-        output_path.to_string_lossy()
+        "serving completed preview from `{}` at http://{server_binding}{} (built for {})",
+        output_path.to_string_lossy(), info.mount_path, info.base_url
     );
 
     for request in server.incoming_requests() {
@@ -56,7 +58,19 @@ fn handle_request(output_path: &Path, request: Request) -> Result<(), Whatever> 
         }
     }
 
-    let Some(paths) = resolve_request_paths(output_path, request.url()) else {
+    // Reload the completed artifact's context rather than using today's workspace
+    // settings. A build promotion gap is unavailable, never incomplete output.
+    let Ok(info) = BuildInfo::read(output_path) else {
+        request.respond(Response::empty(StatusCode(503)))
+            .whatever_context("unable to report unavailable completed build")?;
+        return Ok(());
+    };
+    let Some(local_url) = strip_mount(request.url(), &info.mount_path) else {
+        request.respond(Response::empty(StatusCode(404)))
+            .whatever_context("unable to report request outside preview mount")?;
+        return Ok(());
+    };
+    let Some(paths) = resolve_request_paths(output_path, &local_url) else {
         request
             .respond(Response::empty(StatusCode(400)))
             .whatever_context("unable to send preview bad request response")?;
@@ -70,6 +84,13 @@ fn handle_request(output_path: &Path, request: Request) -> Result<(), Whatever> 
         return Ok(());
     };
 
+    // The opened file remains valid if a build is subsequently promoted. Refuse
+    // a race where URL resolution and opening crossed completed generations.
+    if BuildInfo::read(output_path).ok().as_ref() != Some(&info) {
+        request.respond(Response::empty(StatusCode(503)))
+            .whatever_context("unable to report completed build transition")?;
+        return Ok(());
+    }
     let response = if let Some(value) = content_type(&path) {
         Response::from_file(file).with_header(content_type_header(value))
     } else {
@@ -81,6 +102,21 @@ fn handle_request(output_path: &Path, request: Request) -> Result<(), Whatever> 
         .with_whatever_context(|e| format!("unable to send preview response: {e}"))?;
 
     Ok(())
+}
+
+fn strip_mount(url: &str, mount: &str) -> Option<String> {
+    let raw = url.split(['?', '#']).next().unwrap_or("/");
+    let local = if mount == "/" {
+        raw
+    } else if raw == mount.trim_end_matches('/') {
+        "/"
+    } else {
+        raw.strip_prefix(mount)?
+    };
+    let local = format!("/{}", local.trim_start_matches('/'));
+    // The receipt is internal completion metadata, not a public site endpoint.
+    if decode_url_path(&local)?.trim_start_matches('/') == RECEIPT { return None; }
+    Some(local)
 }
 
 fn open_preview_asset(
@@ -353,5 +389,22 @@ mod tests {
             selected_path(&root, "/inside.txt"),
             Some(root.join("inside.txt"))
         );
+    }
+}
+
+#[cfg(test)]
+mod mount_regressions {
+    use super::*;
+    #[test]
+    fn preview_uses_exact_recorded_mount_once() {
+        for mount in ["/", "/EIPs/", "/ERCs/", "/wg/review/ERCs/"] {
+            assert_eq!(strip_mount(&format!("{mount}20/?q=one#two"), mount), Some("/20/".into()));
+            assert_eq!(strip_mount(mount, mount), Some("/".into()));
+            if mount != "/" {
+                assert_eq!(strip_mount("/20/", mount), None);
+                assert_eq!(strip_mount(&format!("{}-other/20/", mount.trim_end_matches('/')), mount), None);
+            }
+            assert_eq!(strip_mount(&format!("{mount}{RECEIPT}"), mount), None);
+        }
     }
 }

@@ -26,3 +26,8 @@ pub(crate) fn theme_config_path(theme_path: &Path) -> PathBuf {
         .iter()
         .collect()
 }
+
+/// Live rendering is never the reusable completed build.
+pub(crate) fn serve_output_path(build_path: &Path) -> PathBuf {
+    build_path.join("serve-output")
+}

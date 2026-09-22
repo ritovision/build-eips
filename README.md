@@ -124,3 +124,24 @@ This is not a sandbox for arbitrary untrusted templates or executables. Workspac
 configuration, theme code and tools remain trusted; use an isolated environment
 without secrets when running untrusted code. See `docs/audit/R06.md` for the exact
 read/write/preview boundaries and limitations.
+
+## Completed builds and preview
+
+`build` renders and runs requested Pagefind/corpus stages privately. Only a
+successful candidate replaces `<build-root>/output`. A small internal
+`.build-eips-build.json` receipt travels inside that directory, recording its
+completion, effective base URL/mount, source generation and tool identity.
+A failed render or post-processing stage leaves the prior completed output alone.
+Promotion uses two directory renames with rollback; a process crash between them
+may leave no current output, which preview refuses rather than treating as complete.
+
+`serve` uses `<build-root>/serve-output` and cannot clear or invalidate reusable
+build output, including when content/theme static files change. The existing
+single build-root writer lock still serializes build/check/serve operations.
+`preview` serves only receipt-bearing completed output at its recorded mount
+(`/`, `/EIPs/`, `/ERCs/`, etc.), irrespective of later workspace base-URL changes.
+It does not rewrite HTML or regenerate search. Absolute HTML URLs retain the
+build's original host, so build for the desired preview host when browsing locally.
+During replacement, preview refuses incomplete or cross-generation reads with
+HTTP 503. The receipt is not served as a public endpoint. Rebuild prerelease
+output that lacks a receipt; there is no compatibility/migration path.

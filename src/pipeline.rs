@@ -15,7 +15,7 @@ use crate::{
     config::{RepositoryUse, ServerBinding},
     execution::{ConfigurationSnapshot, ResolvedExecution},
     git,
-    layout::{mounted_theme_path, output_path, CONTENT_DIR, REPO_DIR},
+    layout::{mounted_theme_path, output_path, serve_output_path, CONTENT_DIR, REPO_DIR},
     markdown, network_upgrades,
     proposal::OnlyRenderPlan,
     proposal_catalog, proposal_metadata,
@@ -248,20 +248,26 @@ impl Prepared {
     pub(crate) fn build(self) -> Result<(), Whatever> {
         let base_url = self.resolved_base_url().clone();
         let _ = self.write_search_route_for_zola(SearchRouteMode::Build)?;
+        let build_root = self.output_path.parent().whatever_context("output has no build root")?;
+        let (_candidate, candidate_output) = crate::build_artifact::candidate_output(build_root)?;
         zola::build(
             &self.theme_path,
             &self.repo_path,
-            &self.output_path,
+            &candidate_output,
             base_url.as_str(),
         )
         .whatever_context("zola build failed")?;
-        let _ = run_search_index(SearchIndexMode::Build, &self.output_path, &self.search)?;
+        let _ = run_search_index(SearchIndexMode::Build, &candidate_output, &self.search)?;
         let _ = run_search_corpus(
             SearchIndexMode::Build,
-            &self.output_path,
+            &candidate_output,
             &base_url,
             &self.search,
         )?;
+        self.configuration.verify()?;
+        let info = crate::build_artifact::BuildInfo::new(&base_url, &self.repository_use.title, self.source_generation, &self.repo_path)?;
+        info.write(&candidate_output)?;
+        crate::build_artifact::publish(&candidate_output, &self.output_path)?;
         Ok(())
     }
 
@@ -286,10 +292,13 @@ impl Prepared {
             None
         };
 
+        let live_output = serve_output_path(self.output_path.parent().unwrap());
+        crate::generated_fs::check_path(self.output_path.parent().unwrap(), &live_output, false)
+            .whatever_context("unsafe live output path")?;
         let result = zola::serve(
             &self.theme_path,
             &self.repo_path,
-            &self.output_path,
+            &live_output,
             &self.server_binding,
             self.base_url_override.as_ref(),
         )

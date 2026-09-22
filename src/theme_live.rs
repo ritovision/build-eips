@@ -123,7 +123,7 @@ impl LiveTheme {
         .whatever_context("unsafe theme mount")?;
         self.configuration.verify()?;
         self.publication_uncertain = true;
-        let output = crate::layout::output_path(self.config.owned_root.parent().unwrap());
+        let output = crate::layout::serve_output_path(self.config.owned_root.parent().unwrap());
         let refresh = crate::zola::prepare_static_output(&self.stage, &output, &affected)
             .whatever_context("unable to invalidate theme static output; retry pending")?;
         git::sync_working_tree_paths(&self.stage, &self.config.mounted_theme_dir, &affected)

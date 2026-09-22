@@ -149,7 +149,7 @@ pub(crate) fn validate_build_root(
             check_disjoint(build, &sibling)?;
         }
     }
-    for child in ["repo", "output", ".lock"] {
+    for child in ["repo", "output", "serve-output", ".lock"] {
         check_path(build, &build.join(child), false)?;
     }
     Ok(())
