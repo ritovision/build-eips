@@ -257,48 +257,16 @@ fn filesystem_modified(p: &Path) -> Result<Datetime, Whatever> {
     Ok(date_time.to_rfc3339().parse().unwrap())
 }
 
-fn last_modified(p: &Path) -> Result<Datetime, Whatever> {
-    // TODO: Replace this with `git2`
-    let mut command = std::process::Command::new("git");
-    command
-        .current_dir(p.parent().unwrap())
-        .arg("log")
-        .arg("-1")
-        .arg("--pretty=format:%ct")
-        .arg("--")
-        .arg(p.file_name().unwrap());
-
-    let output = command
-        .output()
-        .with_whatever_context(|e| format!("failed to execute {:?}: {e}", command))?;
-
-    if !output.status.success() {
-        let err_str = std::str::from_utf8(&output.stderr).unwrap_or("<non-utf-8>");
-        whatever!("command {:?} failed: {err_str}", command);
-    }
-
-    let date_str = std::str::from_utf8(&output.stdout)
-        .with_whatever_context(|e| format!("command {:?} output not UTF-8: {e}", command))?
-        .trim();
-
-    if date_str.is_empty() {
+fn last_modified(p: &Path, history: &mut crate::last_modified::History) -> Result<Datetime, Whatever> {
+    let Some(unix) = history.timestamp(p)? else {
         debug!(
             "falling back to filesystem modified time for `{}` because git has no timestamp for the current path",
             p.to_string_lossy()
         );
         return filesystem_modified(p);
-    }
-
-    let unix: i64 = date_str.parse().with_whatever_context(|e| {
-        let err_str = std::str::from_utf8(&output.stderr).unwrap_or("<non-utf-8>");
-        format!(
-            "unable to parse timestamp `{date_str}` from {:?}: {e}\n{err_str}",
-            command
-        )
-    })?;
-
-    let date_time = DateTime::from_timestamp(unix, 0).unwrap();
-
+    };
+    let date_time = DateTime::from_timestamp(unix, 0)
+        .whatever_context("proposal history timestamp is out of range")?;
     Ok(date_time.to_rfc3339().parse().unwrap())
 }
 
@@ -844,6 +812,22 @@ pub(crate) fn preprocess_with_network_upgrades(
         format!("could not read directory `{}`", root_path.to_string_lossy())
     })?;
     let dirs: Vec<_> = dir.collect();
+    let mut history = crate::last_modified::History::new(dirs.iter().filter_map(|entry| {
+        let entry = entry.as_ref().ok()?;
+        let path = if entry.file_type().ok()?.is_dir() {
+            entry.path().join("index.md")
+        } else {
+            entry.path()
+        };
+        if path.extension() != Some(OsStr::new("md")) || is_section_index_path(&path) {
+            return None;
+        }
+        let relative = path.strip_prefix(root_path).ok()?;
+        if only_plan.is_some_and(|plan| !plan.should_preprocess_markdown(relative)) {
+            return None;
+        }
+        Some(path)
+    }));
 
     info!("preprocessing markdown");
 
@@ -898,6 +882,7 @@ pub(crate) fn preprocess_with_network_upgrades(
                             only_plan,
                             network_upgrade_index,
                             MissingPathMode::Error,
+                            &mut history,
                         )?;
                     }
                 } else {
@@ -907,6 +892,7 @@ pub(crate) fn preprocess_with_network_upgrades(
                         only_plan,
                         network_upgrade_index,
                         MissingPathMode::Error,
+                        &mut history,
                     )?;
                 }
                 process_assets(root_path, &entry_path, only_plan, MissingPathMode::Error)?;
@@ -931,6 +917,7 @@ pub(crate) fn preprocess_with_network_upgrades(
                     only_plan,
                     network_upgrade_index,
                     MissingPathMode::Error,
+                    &mut history,
                 )?;
             }
         }
@@ -995,6 +982,7 @@ pub(crate) fn preprocess_paths_with_network_upgrades(
         eips.insert(path);
     }
 
+    let mut history = crate::last_modified::History::new(eips.iter().cloned());
     for path in eips {
         process_eip(
             root_path,
@@ -1002,6 +990,7 @@ pub(crate) fn preprocess_paths_with_network_upgrades(
             only_plan,
             network_upgrade_index,
             MissingPathMode::Ignore,
+            &mut history,
         )?;
     }
 
@@ -1566,6 +1555,7 @@ fn process_eip(
     only_plan: Option<&OnlyRenderPlan>,
     network_upgrade_index: Option<&NetworkUpgradeIndex>,
     missing_path_mode: MissingPathMode,
+    history: &mut crate::last_modified::History,
 ) -> Result<(), Whatever> {
     crate::generated_fs::check_path(root, path, false)
         .whatever_context("proposal markdown must be an owned regular path, not a link")?;
@@ -1607,7 +1597,7 @@ fn process_eip(
         .ok()
         .with_whatever_context(|| format!("couldn't parse preamble in `{}`", path_lossy))?;
 
-    let updated = Some(last_modified(path)?);
+    let updated = Some(last_modified(path, history)?);
     let proposal_prefix = public_site_for_preamble(&preamble).proposal_prefix();
 
     let mut front_matter = FrontMatter {
@@ -3230,5 +3220,38 @@ mod empty_bundle_assets_regression {
         let bundle = temp.path().join("90001");
         std::fs::create_dir(&bundle).unwrap();
         super::process_assets(temp.path(), &bundle, None, super::MissingPathMode::Error).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod phase7_timestamp_regressions {
+    use super::*;
+
+    #[test]
+    fn history_absence_retains_exact_filesystem_timestamp_fallback() {
+        let temp = tempfile::tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let tree = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree).unwrap();
+        let sig = git2::Signature::now("history", "history@example.test").unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "empty root", &tree, &[]).unwrap();
+        let content = temp.path().join("content");
+        std::fs::create_dir(&content).unwrap();
+        let path = content.join("00001.md");
+        std::fs::write(&path, "no committed history").unwrap();
+        let expected = filesystem_modified(&path).unwrap();
+        let mut history = crate::last_modified::History::new([path.clone()]);
+        assert_eq!(last_modified(&path, &mut history).unwrap(), expected);
+    }
+
+    #[test]
+    fn already_generated_and_section_only_inputs_do_not_require_git() {
+        let temp = tempfile::tempdir().unwrap();
+        let page = temp.path().join("00001.md");
+        std::fs::write(&page, "+++\ntitle = \"Generated\"\n+++\nunchanged\n").unwrap();
+        std::fs::write(temp.path().join("_index.md"), "---\ntitle: Section\n---\nBody.\n").unwrap();
+        let before = std::fs::read(&page).unwrap();
+        preprocess(temp.path(), None).unwrap();
+        assert_eq!(std::fs::read(page).unwrap(), before);
     }
 }

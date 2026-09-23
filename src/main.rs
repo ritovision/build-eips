@@ -21,6 +21,9 @@ mod github;
 mod layout;
 mod lint;
 mod live;
+#[cfg(test)]
+mod history_probe;
+mod last_modified;
 mod markdown;
 mod network_upgrades;
 mod pipeline;
