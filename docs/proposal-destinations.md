@@ -23,7 +23,7 @@ Official page fallback is `https://eips.ethereum.org/EIPS/eip-N` or
 `https://ercs.ethereum.org/ERCS/erc-N`. Official assets live under `/assets/eip-N/`
 or `/assets/erc-N/` on the corresponding host, not under the WG `/<number>/assets/`
 layout. Each asset path segment is encoded once. Static filenames are preserved;
-ordinary Markdown assets use `.html`, and `README.md`/`index.md` use their containing
+ordinary Markdown assets use `.html`, and `README.md` (case-insensitive)/`index.md` use their containing
 directory. Queries and fragments are appended once, unchanged. This is a routing
 policy, not a promise that every unmerged proposal or asset exists publicly.
 

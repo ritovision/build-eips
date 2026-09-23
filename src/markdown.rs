@@ -2419,12 +2419,14 @@ mod tests {
         ] {
             let (_temp, content) = content_repo(&[
                 ("00555.md", proposal_markdown(555, None, "",
-                    "[image](./00678/assets/nested/caf%C3%A9%20100%25.svg?x=a%26b#part%202)\n[guide](./00678/assets/guide.md?download=1#example)\n[readme](./00678/assets/nested/README.md?q=1#title)\n[index](./00678/assets/index.md?q=2#title)")),
+                    "[image](./00678/assets/nested/caf%C3%A9%20100%25.svg?x=a%26b#part%202)\n[guide](./00678/assets/guide.md?download=1#example)\n[readme](./00678/assets/nested/README.md?q=1#title)\n[index](./00678/assets/index.md?q=2#title)\n[lower](./00678/assets/lower/readme.md?q=3#title)\n[mixed](./00678/assets/mixed/ReAdMe.md?q=4#title)")),
                 ("00678/index.md", proposal_markdown(678, category, "", "Target.")),
                 ("00678/assets/nested/café 100%.svg", "image".to_owned()),
                 ("00678/assets/guide.md", "Guide.".to_owned()),
                 ("00678/assets/nested/README.md", "Readme.".to_owned()),
                 ("00678/assets/index.md", "Index.".to_owned()),
+                ("00678/assets/lower/readme.md", "Lower.".to_owned()),
+                ("00678/assets/mixed/ReAdMe.md", "Mixed.".to_owned()),
             ]);
             let plan = only_plan(&content, &[555]);
             preprocess(&content, Some(&plan)).unwrap();
@@ -2433,6 +2435,7 @@ mod tests {
                 "nested/caf%C3%A9%20100%25.svg?x=a%26b#part%202",
                 "guide.html?download=1#example",
                 "nested/?q=1#title", "?q=2#title",
+                "lower/?q=3#title", "mixed/?q=4#title",
             ] {
                 assert!(body.contains(&format!("https://{host}.ethereum.org/assets/{prefix}-678/{suffix}")), "{body}");
             }
