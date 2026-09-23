@@ -196,3 +196,35 @@ fn publication_failure_does_not_accept_semantics_and_reversion_repairs_partial_o
     assert_eq!(fixture.read(DERIVED_PATHS[1]), hardforks);
     assert_eq!(fixture.read(DERIVED_PATHS[0]), metadata);
 }
+
+#[cfg(unix)]
+#[test]
+fn partial_native_asset_publication_preserves_render_intent_through_source_reversion() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(false);
+    let mut state = fixture.state();
+    let accepted = state.last_good_tree;
+    let config = crate::layout::theme_config_path(&crate::layout::mounted_theme_path(&fixture.live));
+    let initial_config = std::fs::read(&config).unwrap();
+    let asset = "content/phase5-asset.txt";
+    let later = "static/phase5-later.txt";
+    fixture.write(asset, "native render input"); fixture.stage(asset);
+    fixture.write(later, "later failing input"); fixture.stage(later);
+    let destination = fixture.live.join("static");
+    let permissions = std::fs::metadata(&destination).unwrap().permissions();
+    std::fs::set_permissions(&destination, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let result = state.synchronize();
+    std::fs::set_permissions(&destination, permissions).unwrap();
+    assert!(result.is_err());
+    assert!(fixture.live.join(asset).is_file());
+    assert!(!fixture.live.join(later).exists());
+    assert!(state.render_pending);
+    assert_eq!(state.last_good_tree, accepted);
+    std::fs::remove_file(fixture.source.join(asset)).unwrap();
+    std::fs::remove_file(fixture.source.join(later)).unwrap();
+    state.synchronize().unwrap();
+    assert!(!state.needs_publication_retry());
+    assert_eq!(state.last_good_tree, accepted);
+    assert!(!fixture.live.join(asset).exists());
+    assert_ne!(std::fs::read(config).unwrap(), initial_config);
+}

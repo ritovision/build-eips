@@ -527,15 +527,19 @@ impl LiveSource {
                 && path.extension().is_none_or(|extension| extension != "md")
                 && self.stage.join(path).is_file()
         });
-        self.render_pending |= global_semantics_changed || static_refresh
-            || (structural_content_change && !native_asset_write);
+        let retry_render = self.render_pending;
+        let explicit_refresh = global_semantics_changed || static_refresh;
+        // Keep the native render intent until ALL publication succeeds. If an
+        // asset was installed before a later file failed, source reversion or
+        // retry must still request a render of the repaired complete input.
+        self.render_pending |= explicit_refresh || structural_content_change;
         let published = crate::publication::publish(&self.stage, &self.live, &changed_publication)
             .whatever_context("unable to publish validated generation; update may be partial, retry pending")?;
-        if self.render_pending {
+        if self.render_pending && (retry_render || explicit_refresh || !native_asset_write) {
             crate::zola::request_full_rebuild(&self.live)
                 .whatever_context("unable to request coalesced Zola render; retry pending")?;
-            self.render_pending = false;
         }
+        self.render_pending = false;
         self.accepted_catalog = candidate_catalog;
         self.accepted_index = candidate_index;
         self.accepted_projections = candidate_projections;
