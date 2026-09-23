@@ -51,7 +51,7 @@ def fixture(label):
  write(w/'.build-eips.toml','[server]\ninterface="127.0.0.1"\nport=1111\n')
  write(t/'theme.toml','name="audit"\ndescription="audit fixture"\n')
  write(t/'config/zola.toml','base_url="https://example.invalid/"\ntheme="eips-theme"\ncompile_sass=false\nbuild_search_index=false\ntaxonomies=[{name="status"},{name="type"},{name="category"}]\n')
- for name,body in [('index.html','<html>{{ section.content | safe }}</html>'),('section.html','<html>{{ section.content | safe }}</html>'),('page.html','<html>{{ page.content | safe }}</html>'),('eip.html','<html>{{ page.content | safe }}</html>'),('hardforks.html','<html>Hardfork fixture</html>'),('taxonomy_list.html','<html>Taxonomy fixture</html>'),('taxonomy_single.html','<html>Taxonomy term fixture</html>')]: write(t/'templates'/name,body)
+ for name,body in [('index.html','<html>{{ section.content | safe }}</html>'),('section.html','<html>{{ section.content | safe }}</html>'),('page.html','<html>{{ page.content | safe }}</html>'),('eip.html','<html>{{ page.content | safe }}</html>'),('search.html','<html>Search fixture</html>'),('hardforks.html','<html>Hardfork fixture</html>'),('taxonomy_list.html','<html>Taxonomy fixture</html>'),('taxonomy_single.html','<html>Taxonomy term fixture</html>')]: write(t/'templates'/name,body)
  write(t/'config/eipw.toml','schema-version="0.10.0+793e8459b9ab9b4d955d2f98bf4283b94926f6a3e94d5462e392d98b67ac9729"\n[fetch]\nproposal-format="{:05}"\n'); initgit(t)
  write(r/'Build.toml',manifest(r,'EIPs',t,git(t,'rev-parse','HEAD')))
  write(r/'content/_index.md','+++\ntitle="Home"\n+++\n\nHome\n'); write(r/'content/00001.md',md(1)); complete_sources(r); initgit(r)

@@ -796,7 +796,7 @@ fn rendered_path_segments(rendered_path: &str) -> Result<(Vec<&str>, bool), What
 }
 
 fn is_generated_zola_markdown(contents: &str) -> bool {
-    contents.starts_with("+++\n")
+    contents.starts_with("+++\n") || contents.starts_with("+++\r\n")
 }
 
 #[allow(dead_code)]
@@ -2744,16 +2744,19 @@ mod tests {
 
     #[test]
     fn preprocess_skips_generated_zola_markdown_files() {
-        let original =
-            "+++\ntitle = \"Generated\"\n+++\nSee [asset](./00678/assets/missing.pdf).\n";
-        let (_temp, content) = content_repo(&[("00555.md", original.to_owned())]);
+        for newline in ["\n", "\r\n"] {
+            let original = format!(
+                "+++{newline}title = \"Generated\"{newline}+++{newline}See [asset](./00678/assets/missing.pdf).{newline}"
+            );
+            let (_temp, content) = content_repo(&[("00555.md", original.clone())]);
 
-        preprocess(&content, None).unwrap();
+            preprocess(&content, None).unwrap();
 
-        assert_eq!(
-            std::fs::read_to_string(content.join("00555.md")).unwrap(),
-            original
-        );
+            assert_eq!(
+                std::fs::read_to_string(content.join("00555.md")).unwrap(),
+                original
+            );
+        }
     }
 
     #[test]
@@ -3308,5 +3311,19 @@ mod phase7_timestamp_regressions {
         let before = std::fs::read(&page).unwrap();
         preprocess(temp.path(), None).unwrap();
         assert_eq!(std::fs::read(page).unwrap(), before);
+    }
+}
+
+#[cfg(test)]
+mod crlf_editorial_regression {
+    use super::*;
+    #[test]
+    fn toml_crlf_editorial_page_is_not_parsed_as_a_proposal_or_rewritten() {
+        let temp = tempfile::tempdir().unwrap();
+        let page = temp.path().join("_index.md");
+        let bytes = b"+++\r\ntitle='Home'\r\n+++\r\nBody\r\n";
+        std::fs::write(&page, bytes).unwrap();
+        preprocess(temp.path(), None).unwrap();
+        assert_eq!(std::fs::read(page).unwrap(), bytes);
     }
 }
