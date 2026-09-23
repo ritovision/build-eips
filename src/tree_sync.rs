@@ -147,8 +147,10 @@ impl Plan {
         for path in &self.removals {
             // Atomic publishers replace a leaf by rename. Only deletion and
             // incompatible directory shapes need an explicit removal first.
-            if atomic_leaves && self.files.contains(path)
-                && inspect(destination, path)?.is_some_and(|m| !m.is_dir() || crate::generated_fs::is_link(&m))
+            if atomic_leaves
+                && self.files.contains(path)
+                && inspect(destination, path)?
+                    .is_some_and(|m| !m.is_dir() || crate::generated_fs::is_link(&m))
             {
                 continue;
             }

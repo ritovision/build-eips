@@ -22,7 +22,7 @@ use regex::Regex;
 
 use serde::{Deserialize, Serialize};
 
-use std::collections::{BTreeSet, BTreeMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsStr;
 use std::fs::read_to_string;
 use std::io::{ErrorKind, Write};
@@ -145,7 +145,10 @@ fn network_upgrade_membership_value(membership: &NetworkUpgradeMembership) -> Va
     if let Some(route) = &membership.meta.local_route {
         destination.insert("local_route".to_owned(), Value::String(route.clone()));
     }
-    destination.insert("public_url".to_owned(), Value::String(membership.meta.public_url.clone()));
+    destination.insert(
+        "public_url".to_owned(),
+        Value::String(membership.meta.public_url.clone()),
+    );
     table.insert("meta".to_owned(), Value::Table(destination));
     table.insert(
         "stage_key".to_owned(),
@@ -1083,7 +1086,13 @@ fn resolve_asset_link_rewrite(
 
         if plan.has_proposal_asset(&asset_path.content_relative_asset_path) {
             validate_local_proposal_asset(root, source_md_path, iri_path, &asset_path)?;
-            return local_asset_link_rewrite(root, source_md_path, asset_path, rendered_destination_needed).map(Some);
+            return local_asset_link_rewrite(
+                root,
+                source_md_path,
+                asset_path,
+                rendered_destination_needed,
+            )
+            .map(Some);
         }
 
         snafu::whatever!(
@@ -1094,7 +1103,13 @@ fn resolve_asset_link_rewrite(
     }
 
     validate_local_proposal_asset(root, source_md_path, iri_path, &asset_path)?;
-    local_asset_link_rewrite(root, source_md_path, asset_path, rendered_destination_needed).map(Some)
+    local_asset_link_rewrite(
+        root,
+        source_md_path,
+        asset_path,
+        rendered_destination_needed,
+    )
+    .map(Some)
 }
 
 fn validate_local_proposal_asset(
@@ -1119,8 +1134,9 @@ fn effective_markdown_asset_route(
     asset: &ProposalAssetPath,
 ) -> Result<String, Whatever> {
     let path = root.join(&asset.content_relative_asset_path);
-    let contents = read_to_string(&path)
-        .with_whatever_context(|_| format!("unable to inspect Markdown asset `{}`", path.display()))?;
+    let contents = read_to_string(&path).with_whatever_context(|_| {
+        format!("unable to inspect Markdown asset `{}`", path.display())
+    })?;
     if !is_generated_zola_markdown(&contents) {
         // Plain Markdown receives the owned numeric asset route during preprocessing.
         return Ok(asset.rendered_target_path.clone());
@@ -1132,7 +1148,9 @@ fn effective_markdown_asset_route(
         ))?;
     // Zola 0.22.1 retains an explicit path (trimmed, rooted, trailing slash).
     // Its output components are literal path names, not pre-encoded URL segments.
-    let segments = explicit.trim().split('/')
+    let segments = explicit
+        .trim()
+        .split('/')
         .filter(|part| !part.is_empty() && *part != ".")
         .map(percent_encode_url_segment)
         .collect::<Vec<_>>();
@@ -1206,7 +1224,13 @@ fn fix_links<'a, 'b>(
             }
 
             let iri_path: &str = iri_ref.path().as_ref();
-            match resolve_asset_link_rewrite(root, source_md_path, only_plan, iri_path, iri_ref.query().is_some() || iri_path.contains('%'))? {
+            match resolve_asset_link_rewrite(
+                root,
+                source_md_path,
+                only_plan,
+                iri_path,
+                iri_ref.query().is_some() || iri_path.contains('%'),
+            )? {
                 Some(AssetLinkRewrite::Rewrite(url)) => {
                     *dest_url = CowStr::from(append_query_and_fragment(url, &iri_ref));
                     return Ok(e);
@@ -1267,9 +1291,11 @@ fn fix_links<'a, 'b>(
                 // page, so the browser applies any deployment prefix once.
                 let canonical_root = std::fs::canonicalize(root)
                     .whatever_context("could not canonicalize Markdown content root")?;
-                let target_relative = canonicalized.strip_prefix(&canonical_root)
+                let target_relative = canonicalized
+                    .strip_prefix(&canonical_root)
                     .whatever_context("Markdown query target is outside content root")?;
-                let source_relative = source_md_path.strip_prefix(root)
+                let source_relative = source_md_path
+                    .strip_prefix(root)
                     .whatever_context("Markdown query source is outside content root")?;
                 let target_route = absolute_rendered_path_for_content_path(target_relative)?;
                 let source_route = absolute_rendered_path_for_content_path(source_relative)?;
@@ -1397,7 +1423,7 @@ fn process_assets(
     match std::fs::symlink_metadata(&assets_dir) {
         Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error).whatever_context("unable to inspect bundle assets"),
-        Ok(_) => {},
+        Ok(_) => {}
     }
 
     let mut entries = Vec::new();
@@ -1843,7 +1869,9 @@ mod tests {
             slug: display_name.to_ascii_lowercase(),
             source_meta_eip: number(source_meta_eip),
             meta: crate::proposal::ProposalDestination::new(
-                number(source_meta_eip), crate::proposal::ProposalPublicSite::Eips, true,
+                number(source_meta_eip),
+                crate::proposal::ProposalPublicSite::Eips,
+                true,
             ),
             stage_key: stage_key.to_owned(),
             stage_label: stage_label.to_owned(),
@@ -2212,28 +2240,66 @@ mod tests {
     fn queried_markdown_assets_honor_explicit_toml_routes() {
         for (path, expected) in [
             ("678/assets/custom-guide", "../678/assets/custom-guide/"),
-            (" /reference/custom guide %/ ", "../reference/custom%20guide%20%25/"),
+            (
+                " /reference/custom guide %/ ",
+                "../reference/custom%20guide%20%25/",
+            ),
             ("", "../"),
         ] {
             let (_temp, content) = content_repo(&[
-                ("00555.md", proposal_markdown(555, None, "", "[custom](./00678/assets/guide.md?download=1#abstract)")),
-                ("00678/index.md", proposal_markdown(678, None, "", "Target.")),
-                ("00678/assets/guide.md", format!("+++\npath = {path:?}\n+++\n# Abstract\n")),
+                (
+                    "00555.md",
+                    proposal_markdown(
+                        555,
+                        None,
+                        "",
+                        "[custom](./00678/assets/guide.md?download=1#abstract)",
+                    ),
+                ),
+                (
+                    "00678/index.md",
+                    proposal_markdown(678, None, "", "Target."),
+                ),
+                (
+                    "00678/assets/guide.md",
+                    format!("+++\npath = {path:?}\n+++\n# Abstract\n"),
+                ),
             ]);
             let plan = only_plan(&content, &[555, 678]);
             preprocess(&content, Some(&plan)).unwrap();
             let body = rendered_body(&content.join("00555.md"));
-            assert!(body.contains(&format!("[custom]({expected}?download=1#abstract)")), "{body}");
+            assert!(
+                body.contains(&format!("[custom]({expected}?download=1#abstract)")),
+                "{body}"
+            );
         }
     }
 
     #[test]
     fn queried_toml_assets_refuse_unknown_or_unconfined_routes() {
-        for header in ["slug = 'custom'", "path = '../../outside'", "path = '/search/hijack'"] {
+        for header in [
+            "slug = 'custom'",
+            "path = '../../outside'",
+            "path = '/search/hijack'",
+        ] {
             let (_temp, content) = content_repo(&[
-                ("00555.md", proposal_markdown(555, None, "", "[custom](./00678/assets/guide.md?q=1#abstract)")),
-                ("00678/index.md", proposal_markdown(678, None, "", "Target.")),
-                ("00678/assets/guide.md", format!("+++\n{header}\n+++\n# Abstract\n")),
+                (
+                    "00555.md",
+                    proposal_markdown(
+                        555,
+                        None,
+                        "",
+                        "[custom](./00678/assets/guide.md?q=1#abstract)",
+                    ),
+                ),
+                (
+                    "00678/index.md",
+                    proposal_markdown(678, None, "", "Target."),
+                ),
+                (
+                    "00678/assets/guide.md",
+                    format!("+++\n{header}\n+++\n# Abstract\n"),
+                ),
             ]);
             assert!(preprocess(&content, None).is_err(), "{header}");
         }
@@ -2252,13 +2318,23 @@ mod tests {
             preprocess(&content, plan.as_ref()).unwrap();
             let body = rendered_body(&content.join("00555.md"));
             assert!(body.contains("[page](../678/?q=a%26b#abstract)"), "{body}");
-            assert!(body.contains("[asset](../678/assets/guide%20name/?q=a%26b#abstract)"), "{body}");
-            assert!(body.contains("[normal](@/00678/index.md#abstract)"), "{body}");
-            assert!(body.contains("[encoded](../678/assets/guide%20name/#abstract)"), "{body}");
+            assert!(
+                body.contains("[asset](../678/assets/guide%20name/?q=a%26b#abstract)"),
+                "{body}"
+            );
+            assert!(
+                body.contains("[normal](@/00678/index.md#abstract)"),
+                "{body}"
+            );
+            assert!(
+                body.contains("[encoded](../678/assets/guide%20name/#abstract)"),
+                "{body}"
+            );
         }
-        let (_temp, content) = content_repo(&[
-            ("00555.md", proposal_markdown(555, None, "", "[missing](./00678.md?q=1#abstract)")),
-        ]);
+        let (_temp, content) = content_repo(&[(
+            "00555.md",
+            proposal_markdown(555, None, "", "[missing](./00678.md?q=1#abstract)"),
+        )]);
         assert!(preprocess(&content, None).is_err());
     }
 
@@ -2400,7 +2476,10 @@ mod tests {
         assert_eq!(memberships[0]["display_name"].as_str().unwrap(), "Dencun");
         assert_eq!(memberships[0]["slug"].as_str().unwrap(), "dencun");
         assert_eq!(memberships[0]["meta_eip"].as_integer().unwrap(), 7569);
-        assert_eq!(memberships[0]["meta"]["local_route"].as_str().unwrap(), "/7569/");
+        assert_eq!(
+            memberships[0]["meta"]["local_route"].as_str().unwrap(),
+            "/7569/"
+        );
         assert_eq!(memberships[0]["stage_key"].as_str().unwrap(), "included");
         assert_eq!(memberships[0]["stage_label"].as_str().unwrap(), "Included");
         assert_eq!(memberships[0]["subgroup"].as_str().unwrap(), "Core EIPs");
@@ -2525,10 +2604,7 @@ mod tests {
 
     #[test]
     fn targeted_public_asset_policy_preserves_encoded_paths_queries_and_fragments() {
-        for (category, host, prefix) in [
-            (None, "eips", "eip"),
-            (Some("ERC"), "ercs", "erc"),
-        ] {
+        for (category, host, prefix) in [(None, "eips", "eip"), (Some("ERC"), "ercs", "erc")] {
             let (_temp, content) = content_repo(&[
                 ("00555.md", proposal_markdown(555, None, "",
                     "[image](./00678/assets/nested/caf%C3%A9%20100%25.svg?x=a%26b#part%202)\n[guide](./00678/assets/guide.md?download=1#example)\n[readme](./00678/assets/nested/README.md?q=1#title)\n[index](./00678/assets/index.md?q=2#title)\n[lower](./00678/assets/lower/readme.md?q=3#title)\n[mixed](./00678/assets/mixed/ReAdMe.md?q=4#title)")),
@@ -2546,10 +2622,17 @@ mod tests {
             for suffix in [
                 "nested/caf%C3%A9%20100%25.svg?x=a%26b#part%202",
                 "guide.html?download=1#example",
-                "nested/?q=1#title", "?q=2#title",
-                "lower/?q=3#title", "mixed/?q=4#title",
+                "nested/?q=1#title",
+                "?q=2#title",
+                "lower/?q=3#title",
+                "mixed/?q=4#title",
             ] {
-                assert!(body.contains(&format!("https://{host}.ethereum.org/assets/{prefix}-678/{suffix}")), "{body}");
+                assert!(
+                    body.contains(&format!(
+                        "https://{host}.ethereum.org/assets/{prefix}-678/{suffix}"
+                    )),
+                    "{body}"
+                );
             }
             assert!(!body.contains("%2525"));
         }
@@ -3017,7 +3100,10 @@ See [EIP-678](/00678.md).
         let erc_front_matter = rendered_front_matter(&content.join("00020.md"));
         assert_eq!(
             eip_front_matter["extra"]["proposal_id"].as_str().unwrap(),
-            format!("{}-{}", records["eip-1559"].prefix, records["eip-1559"].number)
+            format!(
+                "{}-{}",
+                records["eip-1559"].prefix, records["eip-1559"].number
+            )
         );
         assert_eq!(
             erc_front_matter["extra"]["proposal_id"].as_str().unwrap(),

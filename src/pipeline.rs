@@ -248,7 +248,10 @@ impl Prepared {
         let _ = self.write_search_route_for_zola(SearchRouteMode::Build)?;
         crate::reserved::validate_zola_facing(&self.repo_path)
             .whatever_context("prepared Zola input contains unsafe or reserved routes")?;
-        let build_root = self.output_path.parent().whatever_context("output has no build root")?;
+        let build_root = self
+            .output_path
+            .parent()
+            .whatever_context("output has no build root")?;
         let (_candidate, candidate_output) = crate::build_artifact::candidate_output(build_root)?;
         zola::build(
             &self.theme_path,
@@ -266,7 +269,12 @@ impl Prepared {
             &self.search,
         )?;
         self.configuration.verify()?;
-        let info = crate::build_artifact::BuildInfo::new(&base_url, &self.repository_use.title, self.source_generation, &self.repo_path)?;
+        let info = crate::build_artifact::BuildInfo::new(
+            &base_url,
+            &self.repository_use.title,
+            self.source_generation,
+            &self.repo_path,
+        )?;
         info.write(&candidate_output)?;
         crate::build_artifact::publish(&candidate_output, &self.output_path)?;
         Ok(())

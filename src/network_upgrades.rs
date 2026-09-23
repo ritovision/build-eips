@@ -22,7 +22,9 @@ use serde::Serialize;
 use snafu::{OptionExt, ResultExt, Whatever};
 
 use crate::{
-    proposal::{flat_proposal_number, path_component_proposal_number, ProposalDestination, ProposalNumber},
+    proposal::{
+        flat_proposal_number, path_component_proposal_number, ProposalDestination, ProposalNumber,
+    },
     proposal_catalog::{
         ProposalCatalog, ProposalCatalogPrefix, ProposalCatalogRecord,
         ProposalCatalogSourceDocument,
@@ -2247,7 +2249,10 @@ mod tests {
         assert_eq!(rows[0]["title"].as_str().unwrap(), "Core proposal");
         assert_eq!(rows[0]["status"].as_str().unwrap(), "Final");
         assert_eq!(rows[0]["type"].as_str().unwrap(), "Standards Track");
-        assert_eq!(rows[0]["destination"]["local_route"].as_str().unwrap(), "/2/");
+        assert_eq!(
+            rows[0]["destination"]["local_route"].as_str().unwrap(),
+            "/2/"
+        );
         assert_eq!(rows[0]["category"].as_str().unwrap(), "Core");
         assert_eq!(rows[0]["subgroup"].as_str().unwrap(), "Core EIPs");
         assert_eq!(rows[1]["type"].as_str().unwrap(), "Meta");

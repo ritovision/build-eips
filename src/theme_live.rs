@@ -115,8 +115,9 @@ impl LiveTheme {
             "candidate theme source-read policy rejected; last-good theme retained",
         )?;
         crate::reserved::clear_empty_staged_reservations(&self.stage)?;
-        crate::reserved::validate_inputs(&self.stage)
-            .whatever_context("candidate theme occupies generated paths; last-good theme retained")?;
+        crate::reserved::validate_inputs(&self.stage).whatever_context(
+            "candidate theme occupies generated paths; last-good theme retained",
+        )?;
         if source_stamp(source)? != snapshot.stamp || file_stamps(source, &affected)? != before {
             snafu::whatever!("theme changed during staging; last-good theme retained until retry");
         }
@@ -129,8 +130,12 @@ impl LiveTheme {
         self.configuration.verify()?;
         self.publication_uncertain = true;
         let output = crate::layout::serve_output_path(self.config.owned_root.parent().unwrap());
-        let changed = crate::publication::changed_paths(&self.stage, &self.config.mounted_theme_dir, &affected)
-            .whatever_context("unable to compare theme publication; retry pending")?;
+        let changed = crate::publication::changed_paths(
+            &self.stage,
+            &self.config.mounted_theme_dir,
+            &affected,
+        )
+        .whatever_context("unable to compare theme publication; retry pending")?;
         let retry_render = self.render_pending;
         // A later failure may follow an earlier output removal. Preserve a
         // render obligation even when source reversion makes publication empty.
@@ -138,10 +143,11 @@ impl LiveTheme {
         let refresh = crate::zola::prepare_static_output(&self.stage, &output, &changed)
             .whatever_context("unable to invalidate theme static output; retry pending")?;
         self.render_pending |= refresh;
-        let published = crate::publication::publish(&self.stage, &self.config.mounted_theme_dir, &changed)
-            .whatever_context(
-                "unable to publish theme generation; update may be partial, retry pending",
-            )?;
+        let published =
+            crate::publication::publish(&self.stage, &self.config.mounted_theme_dir, &changed)
+                .whatever_context(
+                    "unable to publish theme generation; update may be partial, retry pending",
+                )?;
         if retry_render || refresh {
             crate::zola::request_full_rebuild(&self.config.owned_root)
                 .whatever_context("unable to refresh theme output; retry pending")?;

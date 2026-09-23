@@ -8,7 +8,11 @@
 //! are replaced by rename, never truncated or unlinked first. A directory/file
 //! transition and a batch of files are NOT an atomic website transaction.
 
-use std::{collections::BTreeSet, fs, io, path::{Path, PathBuf}};
+use std::{
+    collections::BTreeSet,
+    fs, io,
+    path::{Path, PathBuf},
+};
 
 pub(crate) fn changed_paths(
     source: &Path,
@@ -39,7 +43,10 @@ fn same_file(source: &Path, destination: &Path, path: &Path) -> io::Result<bool>
         return Ok(left.is_dir() && right.is_dir());
     }
     if !left.is_file() || !right.is_file() {
-        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported publication file type"));
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "unsupported publication file type",
+        ));
     }
     Ok(left.len() == right.len()
         && left.permissions() == right.permissions()
@@ -58,8 +65,12 @@ pub(crate) fn publish(
     let plan = crate::tree_sync::Plan::new(source, destination, &changed)?;
     // Keep temporary files outside the watched tree: Zola must not copy a
     // temporary static file or try to render partially written Markdown.
-    let parent = source.parent().ok_or_else(|| io::Error::other("private staging has no parent"))?;
-    let scratch = tempfile::Builder::new().prefix(".serve-publication-").tempdir_in(parent)?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| io::Error::other("private staging has no parent"))?;
+    let scratch = tempfile::Builder::new()
+        .prefix(".serve-publication-")
+        .tempdir_in(parent)?;
     plan.prepare_atomic_destination(destination)?;
     for path in &plan.files {
         let source_path = source.join(path);
@@ -75,7 +86,9 @@ pub(crate) fn publish(
             temporary.persist(&destination_path).map_err(|e| e.error)?;
         } else {
             fs::copy(&source_path, temporary.path())?;
-            temporary.as_file().set_permissions(metadata.permissions())?;
+            temporary
+                .as_file()
+                .set_permissions(metadata.permissions())?;
             temporary.persist(&destination_path).map_err(|e| e.error)?;
         }
         log::debug!("published live file `{}`", path.display());
@@ -109,7 +122,10 @@ mod tests {
         write(&source, "content/page.md", "new");
         assert_eq!(publish(&source, &destination, &paths).unwrap(), 1);
         assert_eq!(fs::read_to_string(path).unwrap(), "new");
-        assert_eq!(fs::read_to_string(temp.path().join("old-link")).unwrap(), "same");
+        assert_eq!(
+            fs::read_to_string(temp.path().join("old-link")).unwrap(),
+            "same"
+        );
         assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
     }
 
@@ -120,13 +136,22 @@ mod tests {
         let destination = temp.path().join("live");
         write(&source, "static/item/child", "child");
         write(&destination, "static/item", "old");
-        let paths = BTreeSet::from([PathBuf::from("static/item"), PathBuf::from("static/item/child")]);
+        let paths = BTreeSet::from([
+            PathBuf::from("static/item"),
+            PathBuf::from("static/item/child"),
+        ]);
         publish(&source, &destination, &paths).unwrap();
-        assert_eq!(fs::read_to_string(destination.join("static/item/child")).unwrap(), "child");
+        assert_eq!(
+            fs::read_to_string(destination.join("static/item/child")).unwrap(),
+            "child"
+        );
         fs::remove_dir_all(source.join("static/item")).unwrap();
         write(&source, "static/item", "leaf");
         publish(&source, &destination, &paths).unwrap();
-        assert_eq!(fs::read_to_string(destination.join("static/item")).unwrap(), "leaf");
+        assert_eq!(
+            fs::read_to_string(destination.join("static/item")).unwrap(),
+            "leaf"
+        );
         fs::remove_file(source.join("static/item")).unwrap();
         publish(&source, &destination, &paths).unwrap();
         assert!(!destination.join("static/item").exists());
@@ -138,17 +163,24 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         let source = temp.path().join("source");
         let destination = temp.path().join("live");
-        fs::create_dir(&source).unwrap(); fs::create_dir(&destination).unwrap();
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
         fs::write(temp.path().join("outside"), "keep").unwrap();
         std::os::unix::fs::symlink(temp.path().join("outside"), destination.join("leaf")).unwrap();
         write(&source, "leaf", "replace");
         let paths = BTreeSet::from([PathBuf::from("leaf")]);
         publish(&source, &destination, &paths).unwrap();
-        assert_eq!(fs::read_to_string(temp.path().join("outside")).unwrap(), "keep");
+        assert_eq!(
+            fs::read_to_string(temp.path().join("outside")).unwrap(),
+            "keep"
+        );
         fs::remove_file(source.join("leaf")).unwrap();
         std::os::unix::fs::symlink("target", source.join("leaf")).unwrap();
         publish(&source, &destination, &paths).unwrap();
-        assert_eq!(fs::read_link(destination.join("leaf")).unwrap(), Path::new("target"));
+        assert_eq!(
+            fs::read_link(destination.join("leaf")).unwrap(),
+            Path::new("target")
+        );
         assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
     }
 }

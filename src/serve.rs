@@ -22,10 +22,7 @@ use log::{debug, info, warn};
 use notify::{Event, RecursiveMode, Watcher};
 use snafu::{Report, ResultExt, Whatever};
 
-use crate::{
-    git, live::LiveSource, proposal::OnlyRenderPlan,
-    theme_live::LiveTheme,
-};
+use crate::{git, live::LiveSource, proposal::OnlyRenderPlan, theme_live::LiveTheme};
 
 #[derive(Debug)]
 pub(crate) struct DirtyServeWatcher {
@@ -561,7 +558,9 @@ mod tests {
         for (relative, contents) in files {
             write_file(root, relative, contents);
         }
-        if root.join("content").is_dir() { crate::live::fixture::complete_sources(root); }
+        if root.join("content").is_dir() {
+            crate::live::fixture::complete_sources(root);
+        }
         commit_all(&repo, "initial");
         repo
     }

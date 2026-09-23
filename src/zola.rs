@@ -164,14 +164,18 @@ pub(crate) fn request_full_rebuild(project: &Path) -> std::io::Result<()> {
     static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     const MARKER: &str = "\n# build-eips live render request: ";
     let current = std::fs::read_to_string(&resolved)?;
-    let original = current.rsplit_once(MARKER)
+    let original = current
+        .rsplit_once(MARKER)
         .filter(|(_, suffix)| suffix.trim().parse::<u64>().is_ok())
-        .map(|(original, _)| original).unwrap_or(&current);
+        .map(|(original, _)| original)
+        .unwrap_or(&current);
     let sequence = REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
     let bytes = format!("{original}{MARKER}{sequence}\n");
     let temporary = tempfile::NamedTempFile::new_in(project.parent().unwrap())?;
     std::fs::write(temporary.path(), bytes)?;
-    temporary.as_file().set_permissions(std::fs::metadata(&resolved)?.permissions())?;
+    temporary
+        .as_file()
+        .set_permissions(std::fs::metadata(&resolved)?.permissions())?;
     temporary.persist(&resolved).map_err(|error| error.error)?;
     info!("requested coalesced full Zola render");
     Ok(())
@@ -287,7 +291,10 @@ where
     let config_path = theme_config_path(&mounted_theme_path);
 
     let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
-    let command = args.first().map(|arg| arg.to_string_lossy().into_owned()).unwrap_or_default();
+    let command = args
+        .first()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let prefix = [OsString::from("-c"), config_path.into()].into_iter();
     let args = prefix.chain(args);
     let reader = duct::cmd("zola", args)
@@ -322,12 +329,18 @@ where
     }
 
     let reader = buf.into_inner();
-    let output = reader.try_wait().context(IoSnafu)?.expect("zola should have exited");
-    ensure!(output.status.success(), FailedSnafu {
-        command,
-        status: output.status,
-        diagnostics: diagnostics.into_iter().collect::<Vec<_>>().join("\n"),
-    });
+    let output = reader
+        .try_wait()
+        .context(IoSnafu)?
+        .expect("zola should have exited");
+    ensure!(
+        output.status.success(),
+        FailedSnafu {
+            command,
+            status: output.status,
+            diagnostics: diagnostics.into_iter().collect::<Vec<_>>().join("\n"),
+        }
+    );
 
     Ok(())
 }
@@ -561,7 +574,11 @@ mod diagnostic_regressions {
     #[test]
     fn recognizes_zola_severity_tokens_without_false_positives() {
         for (line, expected, message) in [
-            ("ERROR Found path collisions", Level::Error, "Found path collisions"),
+            (
+                "ERROR Found path collisions",
+                Level::Error,
+                "Found path collisions",
+            ),
             ("WARN: missing image", Level::Warn, "missing image"),
             ("  WARN missing image  ", Level::Warn, "missing image"),
             ("ERROR", Level::Error, ""),
@@ -578,14 +595,24 @@ mod diagnostic_regressions {
 
     #[test]
     fn nonzero_zola_exit_preserves_meaningful_diagnostics() {
-        if find_zola().is_err() { return; }
+        if find_zola().is_err() {
+            return;
+        }
         let temp = tempfile::tempdir().unwrap();
         let project = temp.path().join("project");
         let theme = mounted_theme_path(&project);
         std::fs::create_dir_all(theme.join("config")).unwrap();
         std::fs::create_dir_all(project.join("content")).unwrap();
-        std::fs::write(theme_config_path(&theme), "base_url = 'https://example.test/'\n").unwrap();
-        std::fs::write(project.join("content/_index.md"), "+++\ntitle = 'Failure'\n+++\n[Missing](@/missing.md)\n").unwrap();
+        std::fs::write(
+            theme_config_path(&theme),
+            "base_url = 'https://example.test/'\n",
+        )
+        .unwrap();
+        std::fs::write(
+            project.join("content/_index.md"),
+            "+++\ntitle = 'Failure'\n+++\n[Missing](@/missing.md)\n",
+        )
+        .unwrap();
         let error = check(&theme, &project).unwrap_err();
         assert!(matches!(error, Error::Failed { .. }), "{error}");
         let text = error.to_string();
@@ -615,6 +642,9 @@ mod live_render_request_regressions {
         let second = std::fs::read_to_string(&config).unwrap();
         assert_ne!(first, second);
         assert!(second.starts_with(original));
-        assert_eq!(second.matches("# build-eips live render request:").count(), 1);
+        assert_eq!(
+            second.matches("# build-eips live render request:").count(),
+            1
+        );
     }
 }

@@ -587,9 +587,7 @@ mod tests {
     use tempfile::TempDir;
     use toml_datetime::Datetime;
 
-    use super::{
-        collect_proposal_catalog, ProposalCatalogPrefix, ProposalCatalogRelationships,
-    };
+    use super::{collect_proposal_catalog, ProposalCatalogPrefix, ProposalCatalogRelationships};
     use crate::proposal::{OnlyRenderPlan, ProposalNumber};
 
     fn number(value: u32) -> ProposalNumber {
@@ -660,7 +658,10 @@ mod tests {
         assert_eq!(records["eip-20"].number, number(20));
         assert_eq!(records["eip-20"].prefix, ProposalCatalogPrefix::Eip);
         assert_eq!(records["eip-20"].title, "Flat Proposal");
-        assert_eq!(records["eip-20"].destination.local_route.as_deref(), Some("/20/"));
+        assert_eq!(
+            records["eip-20"].destination.local_route.as_deref(),
+            Some("/20/")
+        );
         assert_eq!(records["erc-21"].number, number(21));
         assert_eq!(records["erc-21"].prefix, ProposalCatalogPrefix::Erc);
         assert_eq!(records["erc-21"].description.as_deref(), Some("Desc"));
@@ -748,19 +749,47 @@ mod tests {
         let catalog = collect_proposal_catalog(temp.path(), None).unwrap();
         let record = &catalog.records()["eip-1559"];
         assert_eq!(record.authors.len(), 4);
-        assert_eq!(record.authors[0].email.as_deref(), Some("alice@example.com"));
+        assert_eq!(
+            record.authors[0].email.as_deref(),
+            Some("alice@example.com")
+        );
         assert_eq!(record.authors[1].github.as_deref(), Some("bob"));
         assert_eq!(record.authors[2].github.as_deref(), Some("carol"));
-        assert_eq!(record.authors[2].email.as_deref(), Some("carol@example.com"));
+        assert_eq!(
+            record.authors[2].email.as_deref(),
+            Some("carol@example.com")
+        );
         assert_eq!(record.authors[3].name, "Dan");
-        assert_eq!(record.created, Some("2021-04-13".parse::<Datetime>().unwrap()));
+        assert_eq!(
+            record.created,
+            Some("2021-04-13".parse::<Datetime>().unwrap())
+        );
         assert_eq!(record.relationships.requires, vec![number(1), number(2)]);
         assert_eq!(record.relationships.replaces, vec![number(3)]);
         assert_eq!(record.relationships.superseded_by, vec![number(4)]);
-        assert_eq!(record.relationships.discussions_to.as_deref(), Some("https://example.test/discuss"));
+        assert_eq!(
+            record.relationships.discussions_to.as_deref(),
+            Some("https://example.test/discuss")
+        );
         let value = serde_json::to_value(record).unwrap();
-        let keys = value.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>();
-        assert_eq!(keys, vec!["category", "description", "number", "prefix", "status", "title", "type"]);
+        let keys = value
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            keys,
+            vec![
+                "category",
+                "description",
+                "number",
+                "prefix",
+                "status",
+                "title",
+                "type"
+            ]
+        );
         let document = catalog.source_documents().next().unwrap();
         assert_eq!(document.body(), "Body\n");
         assert!(document.source_path().ends_with("1559/index.md"));
@@ -769,15 +798,34 @@ mod tests {
     #[test]
     fn proposal_catalog_canonical_optional_fields_and_validation() {
         let temp = TempDir::new().unwrap();
-        write_file(temp.path(), "001.md", &catalog_proposal_markdown(1, "Minimal", None, None));
+        write_file(
+            temp.path(),
+            "001.md",
+            &catalog_proposal_markdown(1, "Minimal", None, None),
+        );
         let catalog = collect_proposal_catalog(temp.path(), None).unwrap();
         let record = &catalog.records()["eip-1"];
         assert!(record.authors.is_empty());
         assert_eq!(record.created, None);
-        assert_eq!(record.relationships, ProposalCatalogRelationships::default());
-        for extra in ["created: not-a-date\n", "requires: not-a-number\n", "replaces: 0\n", "superseded-by: bad\n"] {
-            write_file(temp.path(), "001.md", &catalog_proposal_markdown_with_extra(1, "Invalid", None, None, extra));
-            assert!(collect_proposal_catalog(temp.path(), None).is_err(), "{extra}");
+        assert_eq!(
+            record.relationships,
+            ProposalCatalogRelationships::default()
+        );
+        for extra in [
+            "created: not-a-date\n",
+            "requires: not-a-number\n",
+            "replaces: 0\n",
+            "superseded-by: bad\n",
+        ] {
+            write_file(
+                temp.path(),
+                "001.md",
+                &catalog_proposal_markdown_with_extra(1, "Invalid", None, None, extra),
+            );
+            assert!(
+                collect_proposal_catalog(temp.path(), None).is_err(),
+                "{extra}"
+            );
         }
     }
 
@@ -806,8 +854,14 @@ mod tests {
 
         assert_eq!(records["eip-21"].destination.local_route, None);
         assert_eq!(records["erc-22"].destination.local_route, None);
-        assert_eq!(records["eip-20"].destination.public_url, "https://eips.ethereum.org/EIPS/eip-20");
-        assert_eq!(records["eip-20"].destination.local_route.as_deref(), Some("/20/"));
+        assert_eq!(
+            records["eip-20"].destination.public_url,
+            "https://eips.ethereum.org/EIPS/eip-20"
+        );
+        assert_eq!(
+            records["eip-20"].destination.local_route.as_deref(),
+            Some("/20/")
+        );
         assert_eq!(
             records["eip-21"].destination.public_url,
             "https://eips.ethereum.org/EIPS/eip-21"
