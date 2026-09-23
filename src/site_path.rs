@@ -4,16 +4,21 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 //! Convert relative filesystem paths at the site-path boundary, never vice versa.
-use std::path::{Component, Path};
 use snafu::{OptionExt, Whatever};
+use std::path::{Component, Path};
 
 pub(crate) fn relative(path: &Path) -> Result<String, Whatever> {
     let mut segments = Vec::new();
     for component in path.components() {
         match component {
-            Component::Normal(name) => segments.push(name.to_str().whatever_context("site paths must be UTF-8")?),
-            Component::CurDir => {},
-            _ => snafu::whatever!("site path `{}` must be relative and contain no parent traversal", path.display()),
+            Component::Normal(name) => {
+                segments.push(name.to_str().whatever_context("site paths must be UTF-8")?)
+            }
+            Component::CurDir => {}
+            _ => snafu::whatever!(
+                "site path `{}` must be relative and contain no parent traversal",
+                path.display()
+            ),
         }
     }
     Ok(segments.join("/"))
@@ -23,7 +28,10 @@ mod tests {
     use super::*;
     #[test]
     fn native_filesystem_components_become_site_separators() {
-        assert_eq!(relative(&Path::new("00858").join("assets").join("calculations")).unwrap(), "00858/assets/calculations");
+        assert_eq!(
+            relative(&Path::new("00858").join("assets").join("calculations")).unwrap(),
+            "00858/assets/calculations"
+        );
         assert_eq!(relative(Path::new("")).unwrap(), "");
         assert_eq!(relative(Path::new("café 100% #")).unwrap(), "café 100% #");
     }

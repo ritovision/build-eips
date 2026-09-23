@@ -28,7 +28,10 @@ pub(crate) fn split_preamble(text: &str) -> Result<(&str, &str), SplitError> {
 #[derive(Debug)]
 pub(crate) struct LintFetch;
 impl eipw_lint::fetch::Fetch for LintFetch {
-    fn fetch(&self, path: std::path::PathBuf) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, std::io::Error>>>> {
+    fn fetch(
+        &self,
+        path: std::path::PathBuf,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<String, std::io::Error>>>> {
         Box::pin(async move { Ok(tokio::fs::read_to_string(path).await?.replace("\r\n", "\n")) })
     }
 }
@@ -40,7 +43,11 @@ mod tests {
     fn lf_crlf_and_mixed_delimiters_preserve_body_bytes() {
         for first in ["\n", "\r\n"] {
             for last in ["\n", "\r\n", ""] {
-                let body = if last.is_empty() { "" } else { "\r\nCode\rData\r\n---\r\n" };
+                let body = if last.is_empty() {
+                    ""
+                } else {
+                    "\r\nCode\rData\r\n---\r\n"
+                };
                 let text = format!("---{first}eip: 1\r\ntitle: Café{first}---{last}{body}");
                 let (header, actual) = split_preamble(&text).unwrap();
                 assert_eq!(actual.as_bytes(), body.as_bytes());
@@ -51,7 +58,12 @@ mod tests {
     }
     #[test]
     fn invalid_delimiters_and_leading_garbage_still_fail() {
-        for text in ["---\reip: 1\r---\r", "--- \neip: 1\n---\n", "---\neip: 1\n", "x\n---\neip: 1\n---\n"] {
+        for text in [
+            "---\reip: 1\r---\r",
+            "--- \neip: 1\n---\n",
+            "---\neip: 1\n",
+            "x\n---\neip: 1\n---\n",
+        ] {
             assert!(split_preamble(text).is_err(), "{text:?}");
         }
     }
@@ -62,7 +74,10 @@ mod tests {
         let path = temp.path().join("proposal.md");
         let original = "---\r\neip: 1\r\n---\r\nBody\rdata\r\n";
         std::fs::write(&path, original).unwrap();
-        assert_eq!(LintFetch.fetch(path.clone()).await.unwrap(), original.replace("\r\n", "\n"));
+        assert_eq!(
+            LintFetch.fetch(path.clone()).await.unwrap(),
+            original.replace("\r\n", "\n")
+        );
         assert_eq!(std::fs::read_to_string(path).unwrap(), original);
     }
 }

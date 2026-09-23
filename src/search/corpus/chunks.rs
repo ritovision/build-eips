@@ -90,7 +90,8 @@ fn finish_chunk(chunk: Option<ChunkBuilder>, document: &DocumentRecord) -> Vec<C
         .as_ref()
         .map(|fragment| {
             let encoded = url::form_urlencoded::byte_serialize(fragment.as_bytes())
-                .collect::<String>().replace('+', "%20");
+                .collect::<String>()
+                .replace('+', "%20");
             format!("{}#{encoded}", document.url)
         })
         .unwrap_or_else(|| document.url.clone());

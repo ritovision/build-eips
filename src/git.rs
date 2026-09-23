@@ -577,28 +577,56 @@ fn effective_tracked_worktree_paths(root: &Path) -> Result<BTreeSet<PathBuf>, Er
 
 #[cfg(windows)]
 fn discard_replaced_case_aliases(root: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<(), Error> {
-    let repo = git2::Repository::open(root).context(GitSnafu { what: "inspect case-only source rename" })?;
-    let index = repo.index().context(GitSnafu { what: "read case-only rename index" })?;
-    let indexed: BTreeSet<PathBuf> = index.iter().map(|entry| {
-        std::str::from_utf8(&entry.path).map(PathBuf::from)
-            .map_err(|_| UpdateTreeSnafu { msg: "tracked paths must be UTF-8".to_owned() }.build())
-    }).collect::<Result<_, _>>()?;
-    let key = |path: &Path| path.components().map(|c| portable_component_key(c.as_os_str())).collect::<Result<Vec<_>, _>>();
+    let repo = git2::Repository::open(root).context(GitSnafu {
+        what: "inspect case-only source rename",
+    })?;
+    let index = repo.index().context(GitSnafu {
+        what: "read case-only rename index",
+    })?;
+    let indexed: BTreeSet<PathBuf> = index
+        .iter()
+        .map(|entry| {
+            std::str::from_utf8(&entry.path)
+                .map(PathBuf::from)
+                .map_err(|_| {
+                    UpdateTreeSnafu {
+                        msg: "tracked paths must be UTF-8".to_owned(),
+                    }
+                    .build()
+                })
+        })
+        .collect::<Result<_, _>>()?;
+    let key = |path: &Path| {
+        path.components()
+            .map(|c| portable_component_key(c.as_os_str()))
+            .collect::<Result<Vec<_>, _>>()
+    };
     let mut replacements = std::collections::BTreeMap::new();
     for path in paths.iter().filter(|path| indexed.contains(*path)) {
         let full = root.join(path);
-        let canonical = full.canonicalize().with_context(|_| IoSnafu { path: &full })?;
-        replacements.entry(key(path)?).or_insert_with(Vec::new).push(canonical);
+        let canonical = full
+            .canonicalize()
+            .with_context(|_| IoSnafu { path: &full })?;
+        replacements
+            .entry(key(path)?)
+            .or_insert_with(Vec::new)
+            .push(canonical);
     }
     let mut obsolete = Vec::new();
     for path in paths.iter().filter(|path| !indexed.contains(*path)) {
         if let Some(targets) = replacements.get(&key(path)?) {
             let full = root.join(path);
-            let canonical = full.canonicalize().with_context(|_| IoSnafu { path: &full })?;
-            if targets.contains(&canonical) { obsolete.push(path.clone()); }
+            let canonical = full
+                .canonicalize()
+                .with_context(|_| IoSnafu { path: &full })?;
+            if targets.contains(&canonical) {
+                obsolete.push(path.clone());
+            }
         }
     }
-    for path in obsolete { paths.remove(&path); }
+    for path in obsolete {
+        paths.remove(&path);
+    }
     Ok(())
 }
 
@@ -1814,9 +1842,21 @@ mod tests {
         builder.insert(&name, blob, 0o100644).unwrap();
         let tree = repo.find_tree(builder.write().unwrap()).unwrap();
         let signature = Signature::now("fixture", "fixture@example.test").unwrap();
-        repo.commit(Some("HEAD"), &signature, &signature, "long-path fixture", &tree, &[]).unwrap();
-        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force())).unwrap();
-        assert_eq!(std::fs::read(root.canonicalize().unwrap().join(name)).unwrap(), b"fixture PDF bytes");
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "long-path fixture",
+            &tree,
+            &[],
+        )
+        .unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force()))
+            .unwrap();
+        assert_eq!(
+            std::fs::read(root.canonicalize().unwrap().join(name)).unwrap(),
+            b"fixture PDF bytes"
+        );
     }
 
     fn file_url(path: &Path) -> url::Url {
@@ -1942,7 +1982,9 @@ mod tests {
             .find_reference("refs/build-eips/theme-pin")
             .is_ok());
         assert_eq!(
-            std::fs::read_to_string(destination.join("PINNED.md")).unwrap().replace("\r\n", "\n"),
+            std::fs::read_to_string(destination.join("PINNED.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "pinned
 "
         );
@@ -1997,7 +2039,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(prepared.join("content/_index.md")).unwrap().replace("\r\n", "\n"),
+            std::fs::read_to_string(prepared.join("content/_index.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "active homepage\n"
         );
         assert!(prepared.join("content/00678.md").is_file());
@@ -2189,9 +2233,17 @@ mod tests {
         let root = temp.path().join("source");
         let repo = init_repo(&root, &[("A.md", "upper\n")]);
         let case_sensitive = !root.join("a.md").exists();
-        let base = repo.head().unwrap().peel_to_commit().unwrap().tree().unwrap();
+        let base = repo
+            .head()
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .tree()
+            .unwrap();
         let mut builder = repo.treebuilder(Some(&base)).unwrap();
-        builder.insert("a.md", repo.blob(b"lower\n").unwrap(), 0o100644).unwrap();
+        builder
+            .insert("a.md", repo.blob(b"lower\n").unwrap(), 0o100644)
+            .unwrap();
         let tree = repo.find_tree(builder.write().unwrap()).unwrap();
         assert!(super::validate_portable_tree(&tree).is_err());
         if case_sensitive {
@@ -2218,7 +2270,10 @@ mod tests {
             init_repo(&collision, &[("A.md", "upper\n"), ("B.md", "other\n")]);
             std::fs::rename(collision.join("B.md"), collision.join("a.md")).unwrap();
             let error = super::validate_portable_worktree(&collision).unwrap_err();
-            assert!(error.to_string().contains("case-insensitive filesystem"), "{error}");
+            assert!(
+                error.to_string().contains("case-insensitive filesystem"),
+                "{error}"
+            );
         }
     }
 
@@ -2237,10 +2292,20 @@ mod tests {
         let parent = repo.head().unwrap().peel_to_commit().unwrap();
         let base = parent.tree().unwrap();
         let mut builder = repo.treebuilder(Some(&base)).unwrap();
-        builder.insert("a.md", repo.blob(b"collision\n").unwrap(), 0o100644).unwrap();
+        builder
+            .insert("a.md", repo.blob(b"collision\n").unwrap(), 0o100644)
+            .unwrap();
         let tree = repo.find_tree(builder.write().unwrap()).unwrap();
         let signature = Signature::now("fixture", "fixture@example.test").unwrap();
-        repo.commit(Some("HEAD"), &signature, &signature, "colliding default head", &tree, &[&parent]).unwrap();
+        repo.commit(
+            Some("HEAD"),
+            &signature,
+            &signature,
+            "colliding default head",
+            &tree,
+            &[&parent],
+        )
+        .unwrap();
 
         let unpinned = temp.path().join("workspace/unpinned");
         let error = super::clone_missing_repo(file_url(&source).as_str(), &unpinned).unwrap_err();
@@ -2261,11 +2326,18 @@ mod tests {
             safe
         );
         assert!(pinned.join("A.md").is_file());
-        let names: Vec<_> = std::fs::read_dir(&pinned).unwrap()
-            .map(|entry| entry.unwrap().file_name()).collect();
+        let names: Vec<_> = std::fs::read_dir(&pinned)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect();
         assert!(names.iter().any(|name| name == "A.md"));
         assert!(!names.iter().any(|name| name == "a.md"));
-        assert_eq!(std::fs::read_to_string(pinned.join("A.md")).unwrap().replace("\r\n", "\n"), "safe\n");
+        assert_eq!(
+            std::fs::read_to_string(pinned.join("A.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
+            "safe\n"
+        );
     }
 
     #[test]

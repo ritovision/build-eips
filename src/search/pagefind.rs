@@ -4,9 +4,7 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/.
  */
 
-use std::{
-    path::{Path, PathBuf},
-};
+use std::path::{Path, PathBuf};
 
 use log::info;
 use pagefind::api::PagefindIndex;
@@ -89,9 +87,9 @@ mod tests {
 
     use crate::search::SearchIndexRequest;
 
-    use super::{index_site, PAGEFIND_DIR};
     #[cfg(target_family = "unix")]
     use super::prepare_pagefind_output_path;
+    use super::{index_site, PAGEFIND_DIR};
 
     fn write_file(root: &Path, relative: impl AsRef<Path>, contents: &str) {
         let path = root.join(relative);
@@ -153,7 +151,10 @@ mod tests {
         .unwrap();
 
         assert!(summary.pages_indexed >= 1);
-        assert_eq!(summary.output_path, output_path.join(PAGEFIND_DIR).canonicalize().unwrap());
+        assert_eq!(
+            summary.output_path,
+            output_path.join(PAGEFIND_DIR).canonicalize().unwrap()
+        );
         assert_pagefind_artifacts(&output_path.join(PAGEFIND_DIR));
         assert!(!prepared_source_path.join(PAGEFIND_DIR).exists());
         assert!(!temp.path().join(PAGEFIND_DIR).exists());
@@ -172,7 +173,9 @@ mod tests {
 
         let error = index_site(SearchIndexRequest {
             output_path: output_path.clone(),
-        }).unwrap_err().to_string();
+        })
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("reserved generated path"));
         assert_eq!(std::fs::read_to_string(stale_path).unwrap(), "stale");
     }

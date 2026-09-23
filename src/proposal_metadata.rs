@@ -407,7 +407,14 @@ mod tests {
 
         for key in ["eip-21", "erc-22"] {
             let record = &metadata["proposals"][key];
-            for unused in ["url", "destination", "local_route", "public_url", "authors", "created"] {
+            for unused in [
+                "url",
+                "destination",
+                "local_route",
+                "public_url",
+                "authors",
+                "created",
+            ] {
                 assert!(record.get(unused).is_none(), "{unused}");
             }
         }
@@ -593,11 +600,22 @@ mod tests {
         );
 
         let error = write_proposal_metadata_json(temp.path(), "EIPs", None)
-            .unwrap_err().to_string();
-        for expected in ["proposal route collision", "/20/", "eip-20", "erc-20", "020.md", &Path::new("20").join("index.md").to_string_lossy()] {
+            .unwrap_err()
+            .to_string();
+        for expected in [
+            "proposal route collision",
+            "/20/",
+            "eip-20",
+            "erc-20",
+            "020.md",
+            &Path::new("20").join("index.md").to_string_lossy(),
+        ] {
             assert!(error.contains(expected), "{error}");
         }
-        assert!(!temp.path().join("static/assets/data/proposals.json").exists());
+        assert!(!temp
+            .path()
+            .join("static/assets/data/proposals.json")
+            .exists());
     }
 
     #[test]
@@ -620,7 +638,12 @@ mod tests {
 
         assert!(error.contains("duplicate proposal metadata key `erc-20`"));
         assert!(error.contains("020.md"));
-        assert!(error.contains(&Path::new("20").join("index.md").to_string_lossy().to_string()));
+        assert!(error.contains(
+            &Path::new("20")
+                .join("index.md")
+                .to_string_lossy()
+                .to_string()
+        ));
     }
 
     #[test]

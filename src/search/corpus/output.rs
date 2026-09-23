@@ -5,12 +5,19 @@
  */
 
 //! One normal-site destination, written only into a fresh rendered candidate.
-use std::{fs, io::Write, path::{Path, PathBuf}};
-use snafu::{ResultExt, Whatever};
 use super::schema::CorpusOutput;
 use crate::search::SITE_CORPUS_PATH;
+use snafu::{ResultExt, Whatever};
+use std::{
+    fs,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
-pub(super) fn write_corpus_file(output_path: &Path, corpus: &CorpusOutput) -> Result<PathBuf, Whatever> {
+pub(super) fn write_corpus_file(
+    output_path: &Path,
+    corpus: &CorpusOutput,
+) -> Result<PathBuf, Whatever> {
     crate::reserved::ensure_absent(output_path, SITE_CORPUS_PATH)?;
     let output_file = output_path.join(SITE_CORPUS_PATH);
     let parent = output_file.parent().unwrap();
@@ -19,10 +26,17 @@ pub(super) fn write_corpus_file(output_path: &Path, corpus: &CorpusOutput) -> Re
     fs::create_dir_all(parent).whatever_context("unable to create site corpus directory")?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent)
         .whatever_context("unable to create temporary site corpus")?;
-    serde_json::to_writer(&mut temporary, corpus).whatever_context("unable to encode site corpus")?;
-    temporary.write_all(b"\n").whatever_context("unable to finish site corpus")?;
-    temporary.as_file().sync_all().whatever_context("unable to flush site corpus")?;
-    temporary.persist_noclobber(&output_file)
+    serde_json::to_writer(&mut temporary, corpus)
+        .whatever_context("unable to encode site corpus")?;
+    temporary
+        .write_all(b"\n")
+        .whatever_context("unable to finish site corpus")?;
+    temporary
+        .as_file()
+        .sync_all()
+        .whatever_context("unable to flush site corpus")?;
+    temporary
+        .persist_noclobber(&output_file)
         .whatever_context("site corpus destination is occupied; refusing replacement")?;
     Ok(output_file)
 }
@@ -30,18 +44,31 @@ pub(super) fn write_corpus_file(output_path: &Path, corpus: &CorpusOutput) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn empty() -> CorpusOutput { CorpusOutput { version: 1, source: super::super::tests::fixture_source(), documents: Vec::new(), chunks: Vec::new() } }
+    fn empty() -> CorpusOutput {
+        CorpusOutput {
+            version: 1,
+            source: super::super::tests::fixture_source(),
+            documents: Vec::new(),
+            chunks: Vec::new(),
+        }
+    }
     #[test]
     fn site_corpus_never_overwrites_authored_files_or_directories() {
         for directory in [false, true] {
             let temp = tempfile::tempdir().unwrap();
             let dest = temp.path().join(SITE_CORPUS_PATH);
             fs::create_dir_all(dest.parent().unwrap()).unwrap();
-            if directory { fs::create_dir(&dest).unwrap(); }
-            else { fs::write(&dest, "KEEP").unwrap(); }
+            if directory {
+                fs::create_dir(&dest).unwrap();
+            } else {
+                fs::write(&dest, "KEEP").unwrap();
+            }
             assert!(write_corpus_file(temp.path(), &empty()).is_err());
-            if directory { assert!(dest.is_dir()); }
-            else { assert_eq!(fs::read_to_string(dest).unwrap(), "KEEP"); }
+            if directory {
+                assert!(dest.is_dir());
+            } else {
+                assert_eq!(fs::read_to_string(dest).unwrap(), "KEEP");
+            }
         }
     }
     #[cfg(unix)]
@@ -59,9 +86,14 @@ mod tests {
                 let dest = root.join(SITE_CORPUS_PATH);
                 fs::create_dir_all(dest.parent().unwrap()).unwrap();
                 symlink(outside.join("keep.json"), dest).unwrap();
-            } else { symlink(&outside, root.join("assets")).unwrap(); }
+            } else {
+                symlink(&outside, root.join("assets")).unwrap();
+            }
             assert!(write_corpus_file(&root, &empty()).is_err());
-            assert_eq!(fs::read_to_string(outside.join("keep.json")).unwrap(), "KEEP");
+            assert_eq!(
+                fs::read_to_string(outside.join("keep.json")).unwrap(),
+                "KEEP"
+            );
         }
     }
 }

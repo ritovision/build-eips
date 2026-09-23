@@ -26,19 +26,12 @@ fn write_file(root: &Path, relative: &str, contents: &str) {
     std::fs::write(path, contents).unwrap();
 }
 
-fn request(
-    output_path: PathBuf,
-    enabled: bool,
-    format: SearchCorpusFormat,
-) -> SearchCorpusRequest {
+fn request(output_path: PathBuf, enabled: bool, format: SearchCorpusFormat) -> SearchCorpusRequest {
     SearchCorpusRequest {
         output_path,
         base_url: Url::parse("https://eips-wg.github.io/EIPs/").unwrap(),
         source: fixture_source(),
-        config: SearchCorpusConfig {
-            enabled,
-            format,
-        },
+        config: SearchCorpusConfig { enabled, format },
     }
 }
 
@@ -274,13 +267,9 @@ fn code_table_and_hex_sections_emit_expected_block_kinds() {
         ),
     );
 
-    reconcile_corpus(request(
-        output.clone(),
-        true,
-        SearchCorpusFormat::Chunks,
-    ))
-    .unwrap()
-    .unwrap();
+    reconcile_corpus(request(output.clone(), true, SearchCorpusFormat::Chunks))
+        .unwrap()
+        .unwrap();
 
     let json = read_json(&output.join(SITE_CORPUS_PATH));
     assert!(json["documents"].as_array().unwrap().is_empty());
@@ -401,19 +390,47 @@ fn chunk_record_field_order_is_stable() {
 
 #[test]
 fn corpus_formats_use_fixed_path_and_disabled_mode_never_deletes_content() {
-    for format in [SearchCorpusFormat::Chunks, SearchCorpusFormat::Documents, SearchCorpusFormat::DocumentsAndChunks] {
+    for format in [
+        SearchCorpusFormat::Chunks,
+        SearchCorpusFormat::Documents,
+        SearchCorpusFormat::DocumentsAndChunks,
+    ] {
         let temp = TempDir::new().unwrap();
         let output = temp.path().join("output");
-        write_file(&output, "1/index.html", r#"<main data-pagefind-body><span data-pagefind-meta="proposal:EIP-1"></span><h2 id="a">A</h2><p>Text.</p></main>"#);
-        write_file(&output, "search-corpus.json", "authored historical filename");
-        let summary = reconcile_corpus(request(output.clone(), true, format)).unwrap().unwrap();
-        assert_eq!(summary.output_path, output.join(SITE_CORPUS_PATH).canonicalize().unwrap());
-        assert_eq!(summary.documents, usize::from(format != SearchCorpusFormat::Chunks));
-        assert_eq!(summary.chunks, usize::from(format != SearchCorpusFormat::Documents));
+        write_file(
+            &output,
+            "1/index.html",
+            r#"<main data-pagefind-body><span data-pagefind-meta="proposal:EIP-1"></span><h2 id="a">A</h2><p>Text.</p></main>"#,
+        );
+        write_file(
+            &output,
+            "search-corpus.json",
+            "authored historical filename",
+        );
+        let summary = reconcile_corpus(request(output.clone(), true, format))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            summary.output_path,
+            output.join(SITE_CORPUS_PATH).canonicalize().unwrap()
+        );
+        assert_eq!(
+            summary.documents,
+            usize::from(format != SearchCorpusFormat::Chunks)
+        );
+        assert_eq!(
+            summary.chunks,
+            usize::from(format != SearchCorpusFormat::Documents)
+        );
         let bytes = std::fs::read(output.join(SITE_CORPUS_PATH)).unwrap();
-        assert!(reconcile_corpus(request(output.clone(), false, format)).unwrap().is_none());
+        assert!(reconcile_corpus(request(output.clone(), false, format))
+            .unwrap()
+            .is_none());
         assert_eq!(std::fs::read(output.join(SITE_CORPUS_PATH)).unwrap(), bytes);
-        assert_eq!(std::fs::read_to_string(output.join("search-corpus.json")).unwrap(), "authored historical filename");
+        assert_eq!(
+            std::fs::read_to_string(output.join("search-corpus.json")).unwrap(),
+            "authored historical filename"
+        );
     }
 }
 
@@ -492,8 +509,12 @@ fn corpus_uses_url_and_heading_fallbacks_when_metadata_or_ids_are_absent() {
 
 pub(super) fn fixture_source() -> crate::search::CorpusSource {
     crate::search::CorpusSource {
-        product: "EIPs".into(), base_url: "https://eips-wg.github.io/EIPs/".into(),
-        source_mode: "dirty".into(), source_head: "fixture".into(),
-        materialized_head: "fixture".into(), merged_source_tree: "fixture".into(), only: None,
+        product: "EIPs".into(),
+        base_url: "https://eips-wg.github.io/EIPs/".into(),
+        source_mode: "dirty".into(),
+        source_head: "fixture".into(),
+        materialized_head: "fixture".into(),
+        merged_source_tree: "fixture".into(),
+        only: None,
     }
 }

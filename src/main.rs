@@ -20,12 +20,12 @@ mod git;
 #[cfg(any(windows, test))]
 mod git_link;
 mod github;
-mod layout;
-mod lint;
-mod live;
 #[cfg(test)]
 mod history_probe;
 mod last_modified;
+mod layout;
+mod lint;
+mod live;
 mod markdown;
 mod network_upgrades;
 mod pipeline;
@@ -39,9 +39,9 @@ mod publication;
 mod reserved;
 mod search;
 mod serve;
+mod site_path;
 mod source_reads;
 mod source_text;
-mod site_path;
 mod theme_live;
 mod tree_sync;
 mod workspace;
@@ -124,7 +124,12 @@ fn run() -> Result<(), Whatever> {
         .expect("non-execution commands should have returned earlier");
     let resolved = resolve_execution(&args)?;
 
-    if let RuntimeOperation::Corpus { output, format, force } = &runtime_operation {
+    if let RuntimeOperation::Corpus {
+        output,
+        format,
+        force,
+    } = &runtime_operation
+    {
         corpus_export::run(resolved, output, *format, *force)?;
         return Ok(());
     }

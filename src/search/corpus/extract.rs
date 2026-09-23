@@ -16,7 +16,7 @@ use snafu::{ResultExt, Whatever};
 
 use super::{
     chunks::{collect_text, element_has_pagefind_ignore, extract_chunks},
-    schema::{ExtractedCorpus, DocumentRecord, PagefindData},
+    schema::{DocumentRecord, ExtractedCorpus, PagefindData},
 };
 
 const PAGEFIND_DIR: &str = "pagefind";
@@ -70,10 +70,7 @@ pub(super) fn extract_corpus(
         documents.push(extracted.document);
     }
 
-    Ok(ExtractedCorpus {
-        documents,
-        chunks,
-    })
+    Ok(ExtractedCorpus { documents, chunks })
 }
 
 fn rendered_html_files(output_path: &Path) -> Result<Vec<PathBuf>, Whatever> {
@@ -260,17 +257,26 @@ fn rendered_url(output_path: &Path, html_path: &Path, base_path: &str) -> Result
         .collect::<Vec<_>>();
 
     let directory_url = components.last().is_some_and(|name| name == "index.html");
-    if directory_url { components.pop(); }
+    if directory_url {
+        components.pop();
+    }
     // These are filesystem names, not pre-encoded URL segments. Encode %, #,
     // ?, Unicode and spaces exactly once before resolving the export origin.
     let mut encoded = url::Url::parse("https://corpus.invalid/").expect("literal URL");
     {
         let mut segments = encoded.path_segments_mut().expect("hierarchical URL");
         segments.clear();
-        for component in &components { segments.push(component); }
-        if directory_url && !components.is_empty() { segments.push(""); }
+        for component in &components {
+            segments.push(component);
+        }
+        if directory_url && !components.is_empty() {
+            segments.push("");
+        }
     }
-    Ok(format!("{base_path}{}", encoded.path().trim_start_matches('/')))
+    Ok(format!(
+        "{base_path}{}",
+        encoded.path().trim_start_matches('/')
+    ))
 }
 
 #[cfg(test)]
@@ -279,7 +285,13 @@ mod portable_encoding_regression {
     #[test]
     fn question_mark_is_encoded_once_without_requiring_an_invalid_windows_file() {
         let root = Path::new("rendered");
-        let html = root.join("reference").join("café 100% #?").join("index.html");
-        assert_eq!(rendered_url(root, &html, "/wg/EIPs/").unwrap(), "/wg/EIPs/reference/caf%C3%A9%20100%25%20%23%3F/");
+        let html = root
+            .join("reference")
+            .join("café 100% #?")
+            .join("index.html");
+        assert_eq!(
+            rendered_url(root, &html, "/wg/EIPs/").unwrap(),
+            "/wg/EIPs/reference/caf%C3%A9%20100%25%20%23%3F/"
+        );
     }
 }

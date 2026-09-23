@@ -245,13 +245,22 @@ pub(crate) enum ChangedFormat {
 #[derive(Debug, Clone)]
 pub(crate) enum RuntimeOperation {
     Build,
-    Corpus { output: PathBuf, format: SearchCorpusFormat, force: bool },
+    Corpus {
+        output: PathBuf,
+        format: SearchCorpusFormat,
+        force: bool,
+    },
     Serve,
     Preview,
     Clean,
     Check,
-    Changed { all: bool, format: ChangedFormat },
-    Editorial { command: EditorialCommand },
+    Changed {
+        all: bool,
+        format: ChangedFormat,
+    },
+    Editorial {
+        command: EditorialCommand,
+    },
 }
 
 impl Operation {
@@ -272,7 +281,9 @@ impl Operation {
 
     pub(crate) fn base_url_cli_args(&self) -> BaseUrlCliArgs {
         match self {
-            Self::Build { base_url, .. } | Self::Serve { base_url, .. } | Self::Corpus { base_url, .. } => base_url.clone(),
+            Self::Build { base_url, .. }
+            | Self::Serve { base_url, .. }
+            | Self::Corpus { base_url, .. } => base_url.clone(),
             Self::Print { .. }
             | Self::Preview { .. }
             | Self::Clean
@@ -286,9 +297,10 @@ impl Operation {
 
     pub(crate) fn clean_cli_args(&self) -> CleanCliArgs {
         match self {
-            Self::Build { clean, .. } | Self::Serve { clean, .. } | Self::Corpus { clean, .. } | Self::Check { clean } => {
-                clean.clone()
-            }
+            Self::Build { clean, .. }
+            | Self::Serve { clean, .. }
+            | Self::Corpus { clean, .. }
+            | Self::Check { clean } => clean.clone(),
             Self::Print { .. }
             | Self::Preview { .. }
             | Self::Clean
@@ -301,7 +313,9 @@ impl Operation {
 
     pub(crate) fn only_cli_args(&self) -> Option<&OnlyCliArgs> {
         match self {
-            Self::Build { only, .. } | Self::Serve { only, .. } | Self::Corpus { only, .. } => Some(only),
+            Self::Build { only, .. } | Self::Serve { only, .. } | Self::Corpus { only, .. } => {
+                Some(only)
+            }
             Self::Print { .. }
             | Self::Preview { .. }
             | Self::Clean
@@ -344,8 +358,15 @@ impl Operation {
         match self {
             Self::Print { .. } | Self::Init { .. } | Self::Doctor => None,
             Self::Build { .. } => Some(RuntimeOperation::Build),
-            Self::Corpus { output, format, force, .. } => Some(RuntimeOperation::Corpus {
-                output: output.clone(), format: *format, force: *force,
+            Self::Corpus {
+                output,
+                format,
+                force,
+                ..
+            } => Some(RuntimeOperation::Corpus {
+                output: output.clone(),
+                format: *format,
+                force: *force,
             }),
             Self::Serve { .. } => Some(RuntimeOperation::Serve),
             Self::Preview { .. } => Some(RuntimeOperation::Preview),
@@ -429,21 +450,54 @@ mod tests {
     fn corpus_requires_output_and_parses_first_production_controls() {
         assert!(Args::try_parse_from(["build-eips", "corpus"]).is_err());
         for format in ["documents", "chunks", "documents-and-chunks"] {
-            let args = parse_args(&["build-eips", "--remote-siblings", "corpus", "--output", "export.json",
-                "--format", format, "--force", "--clean", "--base-url", "https://example.test/EIPs/", "--only", "1559", "20"]);
+            let args = parse_args(&[
+                "build-eips",
+                "--remote-siblings",
+                "corpus",
+                "--output",
+                "export.json",
+                "--format",
+                format,
+                "--force",
+                "--clean",
+                "--base-url",
+                "https://example.test/EIPs/",
+                "--only",
+                "1559",
+                "20",
+            ]);
             assert!(args.remote_siblings);
             assert!(args.operation.clean_cli_args().clean);
             assert_eq!(args.operation.only_cli_args().unwrap().only.len(), 2);
-            assert!(matches!(args.operation.runtime_operation(), Some(RuntimeOperation::Corpus { force: true, .. })));
+            assert!(matches!(
+                args.operation.runtime_operation(),
+                Some(RuntimeOperation::Corpus { force: true, .. })
+            ));
         }
         let args = parse_args(&["build-eips", "corpus", "--output", "export.json"]);
-        assert!(matches!(args.operation.runtime_operation(), Some(RuntimeOperation::Corpus {
-            format: SearchCorpusFormat::DocumentsAndChunks, force: false, ..
-        })));
+        assert!(matches!(
+            args.operation.runtime_operation(),
+            Some(RuntimeOperation::Corpus {
+                format: SearchCorpusFormat::DocumentsAndChunks,
+                force: false,
+                ..
+            })
+        ));
         for extra in ["--no-search", "--search-corpus", "--staging"] {
-            assert!(Args::try_parse_from(["build-eips", "corpus", "--output", "out.json", extra]).is_err());
+            assert!(
+                Args::try_parse_from(["build-eips", "corpus", "--output", "out.json", extra])
+                    .is_err()
+            );
         }
-        assert!(Args::try_parse_from(["build-eips", "corpus", "--output", "out.json", "--format", "old"]).is_err());
+        assert!(Args::try_parse_from([
+            "build-eips",
+            "corpus",
+            "--output",
+            "out.json",
+            "--format",
+            "old"
+        ])
+        .is_err());
     }
 
     #[test]

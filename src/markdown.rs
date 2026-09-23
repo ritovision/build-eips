@@ -1019,19 +1019,31 @@ fn path_to_at(root: &Path, parent: &Path, input: &str) -> Result<String, Whateve
     };
 
     let cchild = canonicalize_md(root, &child)?;
-    let relative = cchild.strip_prefix(&croot)
+    let relative = cchild
+        .strip_prefix(&croot)
         .whatever_context("Markdown target is outside content root")?;
     Ok(format!("@/{}", crate::site_path::relative(relative)?))
 }
 
 fn canonicalize_md(root: &Path, path: &Path) -> Result<PathBuf, Whatever> {
     let canonical = canonicalize_md_path(path)?;
-    let content = root.canonicalize().whatever_context("unable to resolve Markdown content root")?;
-    if canonical.starts_with(&content) { return Ok(canonical); }
+    let content = root
+        .canonicalize()
+        .whatever_context("unable to resolve Markdown content root")?;
+    if canonical.starts_with(&content) {
+        return Ok(canonical);
+    }
     #[cfg(windows)]
-    { crate::git_link::content_alias(&content, &canonical) }
+    {
+        crate::git_link::content_alias(&content, &canonical)
+    }
     #[cfg(not(windows))]
-    { snafu::whatever!("Markdown target `{}` is outside content root", path.display()) }
+    {
+        snafu::whatever!(
+            "Markdown target `{}` is outside content root",
+            path.display()
+        )
+    }
 }
 
 fn canonicalize_md_path(path: &Path) -> Result<PathBuf, Whatever> {
@@ -1530,23 +1542,35 @@ fn process_assets(
         let relative_path = path.strip_prefix(&assets_dir).unwrap();
         let relative_path = relative_path.with_file_name(relative_path.file_stem().unwrap());
 
-        let alias_bases = [format!("/assets/eip-{number}/"), format!("/assets/erc-{number}/")];
+        let alias_bases = [
+            format!("/assets/eip-{number}/"),
+            format!("/assets/erc-{number}/"),
+        ];
 
         let mut aliases = Vec::with_capacity(alias_bases.len());
 
         for alias_base in &alias_bases {
-            aliases.push(format!("{alias_base}{}", crate::site_path::relative(&relative_path)?));
+            aliases.push(format!(
+                "{alias_base}{}",
+                crate::site_path::relative(&relative_path)?
+            ));
         }
 
         if relative_path.ends_with("README") || relative_path.ends_with("index") {
             let index_path = relative_path.parent().unwrap();
             for alias_base in &alias_bases {
-                aliases.push(format!("{alias_base}{}", crate::site_path::relative(index_path)?));
+                aliases.push(format!(
+                    "{alias_base}{}",
+                    crate::site_path::relative(index_path)?
+                ));
             }
         }
 
         let front_matter = FrontMatter {
-            path: format!("{number}/assets/{}", crate::site_path::relative(&relative_path)?),
+            path: format!(
+                "{number}/assets/{}",
+                crate::site_path::relative(&relative_path)?
+            ),
             aliases,
             ..Default::default()
         };
@@ -1677,15 +1701,15 @@ fn process_eip(
                         Some("index") => alias_path.parent().unwrap().file_name().unwrap(),
                         _ => file_stem,
                     };
-                    front_matter.aliases.push(root.to_str().whatever_context("proposal alias must be UTF-8")?.to_owned());
+                    front_matter.aliases.push(
+                        root.to_str()
+                            .whatever_context("proposal alias must be UTF-8")?
+                            .to_owned(),
+                    );
                 }
 
-                front_matter
-                    .aliases
-                    .push(format!("ERCS/erc-{number}"));
-                front_matter
-                    .aliases
-                    .push(format!("EIPS/eip-{number}"));
+                front_matter.aliases.push(format!("ERCS/erc-{number}"));
+                front_matter.aliases.push(format!("EIPS/eip-{number}"));
             }
             "author" => {
                 let authors = extract_authors(value)?;

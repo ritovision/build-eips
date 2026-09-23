@@ -180,7 +180,9 @@ fn execution_commands_discover_workspace_config_from_active_repo_root() {
 
     assert_eq!(
         resolved.build_path,
-        workspace_root.canonicalize().unwrap()
+        workspace_root
+            .canonicalize()
+            .unwrap()
             .join(config::DEFAULT_BUILD_ROOT_BASE)
             .join("Core")
     );
@@ -286,7 +288,10 @@ fn non_workspace_runtime_path_falls_back_to_active_repo_build_dir() {
 
     let resolved = resolve_execution(&args).unwrap();
 
-    assert_eq!(resolved.build_path, active_path.canonicalize().unwrap().join(BUILD_DIR));
+    assert_eq!(
+        resolved.build_path,
+        active_path.canonicalize().unwrap().join(BUILD_DIR)
+    );
 }
 
 #[test]
@@ -358,7 +363,14 @@ fn workspace_local_sources_resolve_from_standard_layout() {
 
     assert_eq!(
         resolved.theme_path.as_deref(),
-        Some(workspace.path().join(config::DEFAULT_THEME_DIR).canonicalize().unwrap().as_path())
+        Some(
+            workspace
+                .path()
+                .join(config::DEFAULT_THEME_DIR)
+                .canonicalize()
+                .unwrap()
+                .as_path()
+        )
     );
     assert_eq!(
         resolved.repository_use.other_repos["EIPs"],
@@ -616,8 +628,16 @@ fn unsupported_active_product_fails_before_runtime_preparation() {
     let args = parse_args(&["build-eips", "-C", active_path.to_str().unwrap(), "build"]);
     let resolved = resolve_execution(&args).unwrap();
     let build_path = resolved.build_path.clone();
-    let error = crate::pipeline::Prepared::prepare(resolved).unwrap_err().to_string();
-    assert!(error.contains("unsupported active repository title `Core`"), "{error}");
+    let error = crate::pipeline::Prepared::prepare(resolved)
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("unsupported active repository title `Core`"),
+        "{error}"
+    );
     assert!(error.contains("expected `EIPs` or `ERCs`"), "{error}");
-    assert!(!build_path.exists(), "invalid product must not materialize sources");
+    assert!(
+        !build_path.exists(),
+        "invalid product must not materialize sources"
+    );
 }

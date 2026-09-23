@@ -824,7 +824,9 @@ fn public_asset_url(entry: &ProposalAssetInventoryEntry) -> String {
     if entry.kind == ProposalAssetKind::Markdown {
         // Official sites render Markdown pages as .html, with README/index
         // documents at their directory index. This is not the WG /N/assets/ layout.
-        let directory_index = entry.asset_relative_path.file_name()
+        let directory_index = entry
+            .asset_relative_path
+            .file_name()
             .and_then(OsStr::to_str)
             .is_some_and(|name| name == "index.md" || name.eq_ignore_ascii_case("readme.md"));
         if directory_index {

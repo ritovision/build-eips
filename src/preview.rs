@@ -14,7 +14,10 @@ use log::info;
 use snafu::{ResultExt, Whatever};
 use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
-use crate::{config::ServerBinding, build_artifact::{BuildInfo, RECEIPT}};
+use crate::{
+    build_artifact::{BuildInfo, RECEIPT},
+    config::ServerBinding,
+};
 
 const INDEX_HTML: &str = "index.html";
 
@@ -37,7 +40,9 @@ pub fn serve(output_path: &Path, server_binding: &ServerBinding) -> Result<(), W
 
     info!(
         "serving completed preview from `{}` at http://{server_binding}{} (built for {})",
-        output_path.to_string_lossy(), info.mount_path, info.base_url
+        output_path.to_string_lossy(),
+        info.mount_path,
+        info.base_url
     );
 
     for request in server.incoming_requests() {
@@ -61,12 +66,14 @@ fn handle_request(output_path: &Path, request: Request) -> Result<(), Whatever> 
     // Reload the completed artifact's context rather than using today's workspace
     // settings. A build promotion gap is unavailable, never incomplete output.
     let Ok(info) = BuildInfo::read(output_path) else {
-        request.respond(Response::empty(StatusCode(503)))
+        request
+            .respond(Response::empty(StatusCode(503)))
             .whatever_context("unable to report unavailable completed build")?;
         return Ok(());
     };
     let Some(local_url) = strip_mount(request.url(), &info.mount_path) else {
-        request.respond(Response::empty(StatusCode(404)))
+        request
+            .respond(Response::empty(StatusCode(404)))
             .whatever_context("unable to report request outside preview mount")?;
         return Ok(());
     };
@@ -81,20 +88,23 @@ fn handle_request(output_path: &Path, request: Request) -> Result<(), Whatever> 
     // Check even the open/error/404 cases: promotion can temporarily remove the
     // root. That must not terminate the long-running preview server.
     if BuildInfo::read(output_path).ok().as_ref() != Some(&info) {
-        request.respond(Response::empty(StatusCode(503)))
+        request
+            .respond(Response::empty(StatusCode(503)))
             .whatever_context("unable to report completed build transition")?;
         return Ok(());
     }
     let (path, file) = match asset {
         Ok(Some(asset)) => asset,
         Ok(None) => {
-            request.respond(Response::empty(StatusCode(404)))
+            request
+                .respond(Response::empty(StatusCode(404)))
                 .whatever_context("unable to send preview not found response")?;
             return Ok(());
         }
         Err(error) => {
             log::warn!("unable to open preview asset: {error}");
-            request.respond(Response::empty(StatusCode(503)))
+            request
+                .respond(Response::empty(StatusCode(503)))
                 .whatever_context("unable to report unavailable preview asset")?;
             return Ok(());
         }
@@ -123,7 +133,9 @@ fn strip_mount(url: &str, mount: &str) -> Option<String> {
     };
     let local = format!("/{}", local.trim_start_matches('/'));
     // The receipt is internal completion metadata, not a public site endpoint.
-    if decode_url_path(&local)?.trim_start_matches('/') == RECEIPT { return None; }
+    if decode_url_path(&local)?.trim_start_matches('/') == RECEIPT {
+        return None;
+    }
     Some(local)
 }
 
@@ -146,7 +158,9 @@ fn open_preview_asset(
             Err(error) => return Err(error).whatever_context("unable to resolve preview asset"),
         };
         // Also hide normalized paths and symlink aliases to the private receipt.
-        if path == root.join(RECEIPT) { continue; }
+        if path == root.join(RECEIPT) {
+            continue;
+        }
         // Do not open special files such as FIFOs, which can block the server.
         if !std::fs::metadata(&path)
             .whatever_context("unable to inspect preview asset")?
@@ -408,11 +422,17 @@ mod mount_regressions {
     #[test]
     fn preview_uses_exact_recorded_mount_once() {
         for mount in ["/", "/EIPs/", "/ERCs/", "/wg/review/ERCs/"] {
-            assert_eq!(strip_mount(&format!("{mount}20/?q=one#two"), mount), Some("/20/".into()));
+            assert_eq!(
+                strip_mount(&format!("{mount}20/?q=one#two"), mount),
+                Some("/20/".into())
+            );
             assert_eq!(strip_mount(mount, mount), Some("/".into()));
             if mount != "/" {
                 assert_eq!(strip_mount("/20/", mount), None);
-                assert_eq!(strip_mount(&format!("{}-other/20/", mount.trim_end_matches('/')), mount), None);
+                assert_eq!(
+                    strip_mount(&format!("{}-other/20/", mount.trim_end_matches('/')), mount),
+                    None
+                );
             }
             assert_eq!(strip_mount(&format!("{mount}{RECEIPT}"), mount), None);
         }
@@ -426,8 +446,17 @@ mod receipt_privacy_regression {
     fn normalized_receipt_routes_are_not_public_assets() {
         let temp = tempfile::tempdir().unwrap();
         std::fs::write(temp.path().join(RECEIPT), "private receipt").unwrap();
-        for url in [format!("/{RECEIPT}"), format!("/./{RECEIPT}"), format!("//{RECEIPT}")] {
-            assert!(open_preview_asset(temp.path(), resolve_request_paths(temp.path(), &url).unwrap()).unwrap().is_none());
+        for url in [
+            format!("/{RECEIPT}"),
+            format!("/./{RECEIPT}"),
+            format!("//{RECEIPT}"),
+        ] {
+            assert!(open_preview_asset(
+                temp.path(),
+                resolve_request_paths(temp.path(), &url).unwrap()
+            )
+            .unwrap()
+            .is_none());
         }
     }
 }

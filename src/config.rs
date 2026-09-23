@@ -392,7 +392,6 @@ pub struct SearchCorpusSettings {
 
     /// Which corpus views to emit.
     pub format: SearchCorpusFormat,
-
 }
 
 /// Rendered search corpus output format.
@@ -513,8 +512,16 @@ impl LoadedWorkspaceConfig {
         let contents = std::fs::read_to_string(&config_path).with_context(|_| FsSnafu {
             path: config_path.clone(),
         })?;
-        let value: toml::Value = toml::from_str(&contents).with_context(|_| WorkspaceParseSnafu { config_path: config_path.clone() })?;
-        if value.get("search").and_then(|v| v.get("corpus")).and_then(|v| v.get("output")).is_some() {
+        let value: toml::Value =
+            toml::from_str(&contents).with_context(|_| WorkspaceParseSnafu {
+                config_path: config_path.clone(),
+            })?;
+        if value
+            .get("search")
+            .and_then(|v| v.get("corpus"))
+            .and_then(|v| v.get("output"))
+            .is_some()
+        {
             return Err(WorkspaceError::RemovedCorpusOutput { config_path });
         }
         let config =
@@ -792,7 +799,10 @@ mod workspace_tests {
 
         let config = LoadedWorkspaceConfig::from_path(&config_path).unwrap();
 
-        assert_eq!(config.workspace_root(), workspace.root().canonicalize().unwrap());
+        assert_eq!(
+            config.workspace_root(),
+            workspace.root().canonicalize().unwrap()
+        );
         assert_eq!(config.server_settings(), &ServerSettings::default());
         assert_eq!(
             config.site_settings().base_url.as_ref().unwrap().as_str(),
@@ -1174,7 +1184,10 @@ repository = "https://github.com/eips-wg/theme.git"
         let config_path = workspace.write_file(LOCAL_CONFIG_FILE, &default_workspace_config_text());
         let nested = workspace.create_dir("EIPs/content");
 
-        assert_eq!(discover_path(&nested).unwrap().canonicalize().unwrap(), config_path.canonicalize().unwrap());
+        assert_eq!(
+            discover_path(&nested).unwrap().canonicalize().unwrap(),
+            config_path.canonicalize().unwrap()
+        );
         assert_eq!(
             LoadedWorkspaceConfig::discover(&nested)
                 .unwrap()
@@ -1263,9 +1276,18 @@ mod removed_corpus_setting_regression {
     fn prerelease_output_key_is_refused_even_when_corpus_is_disabled() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join(".build-eips.toml");
-        std::fs::write(&path, "[search.corpus]\nenabled = false\noutput = 'index.html'\n").unwrap();
-        let error = super::LoadedWorkspaceConfig::from_path(&path).unwrap_err().to_string();
+        std::fs::write(
+            &path,
+            "[search.corpus]\nenabled = false\noutput = 'index.html'\n",
+        )
+        .unwrap();
+        let error = super::LoadedWorkspaceConfig::from_path(&path)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("removed [search.corpus].output"), "{error}");
-        assert!(error.contains("assets/generated/search/corpus.json"), "{error}");
+        assert!(
+            error.contains("assets/generated/search/corpus.json"),
+            "{error}"
+        );
     }
 }

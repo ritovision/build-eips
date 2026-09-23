@@ -292,37 +292,54 @@ impl Prepared {
         search::write_search_route(
             &self.repo_path,
             SearchTemplateState::from_base_url(false, base_url),
-        ).whatever_context("unable to write private export search state")?;
+        )
+        .whatever_context("unable to write private export search state")?;
         crate::reserved::validate_zola_facing(&self.repo_path)?;
-        zola::build(&self.theme_path, &self.repo_path, &self.output_path, base_url.as_str())
-            .whatever_context("private corpus render failed")?;
+        zola::build(
+            &self.theme_path,
+            &self.repo_path,
+            &self.output_path,
+            base_url.as_str(),
+        )
+        .whatever_context("private corpus render failed")?;
         crate::reserved::validate_rendered(&self.output_path)?;
         self.configuration.verify()?;
-        let summary = search::export_corpus(
-            &self.output_path, base_url, source, format, destination,
-        )?;
-        log::info!("corpus exported: {} documents, {} chunks to `{}`",
-            summary.documents, summary.chunks, summary.output_path.display());
+        let summary =
+            search::export_corpus(&self.output_path, base_url, source, format, destination)?;
+        log::info!(
+            "corpus exported: {} documents, {} chunks to `{}`",
+            summary.documents,
+            summary.chunks,
+            summary.output_path.display()
+        );
         Ok(())
     }
 
     fn corpus_source(&self, base_url: &Url) -> Result<search::CorpusSource, Whatever> {
         let repo = git::open_generated_repository(&self.repo_path)
             .whatever_context("unable to identify corpus source")?;
-        let tree = repo.head().and_then(|h| h.peel_to_tree())
-            .whatever_context("unable to identify merged corpus source tree")?.id();
+        let tree = repo
+            .head()
+            .and_then(|h| h.peel_to_tree())
+            .whatever_context("unable to identify merged corpus source tree")?
+            .id();
         Ok(search::CorpusSource {
             product: self.repository_use.title.clone(),
             base_url: base_url.to_string(),
             source_mode: match self.source_materialization {
                 git::SourceMaterialization::Dirty => "dirty",
                 git::SourceMaterialization::Clean => "clean",
-            }.to_owned(),
+            }
+            .to_owned(),
             source_head: self.source_generation.source_head.to_string(),
             materialized_head: self.source_generation.materialized_head.to_string(),
             merged_source_tree: tree.to_string(),
-            only: self.only_plan.as_ref().map(|plan|
-                plan.selected_numbers().into_iter().map(|n| n.get()).collect()),
+            only: self.only_plan.as_ref().map(|plan| {
+                plan.selected_numbers()
+                    .into_iter()
+                    .map(|n| n.get())
+                    .collect()
+            }),
         })
     }
 
@@ -741,7 +758,9 @@ mod tests {
             prepare_resolved_source(&resolved).unwrap();
 
             assert_eq!(
-                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
+                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md"))
+                    .unwrap()
+                    .replace("\r\n", "\n"),
                 ACTIVE_PROPOSAL
             );
         }
@@ -759,11 +778,15 @@ mod tests {
         prepare_resolved_source(&resolved).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
+            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             ACTIVE_PROPOSAL
         );
         assert_eq!(
-            std::fs::read_to_string(prepared_path(&resolved, "content/00002.md")).unwrap().replace("\r\n", "\n"),
+            std::fs::read_to_string(prepared_path(&resolved, "content/00002.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             "sibling\n"
         );
     }
@@ -785,7 +808,9 @@ mod tests {
             prepare_resolved_source(&resolved).unwrap();
 
             assert_eq!(
-                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
+                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md"))
+                    .unwrap()
+                    .replace("\r\n", "\n"),
                 ACTIVE_PROPOSAL
             );
         }
@@ -834,7 +859,9 @@ mod tests {
         prepare_resolved_source(&resolved).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
+            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md"))
+                .unwrap()
+                .replace("\r\n", "\n"),
             ACTIVE_PROPOSAL
         );
     }

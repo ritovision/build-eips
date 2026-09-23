@@ -241,9 +241,7 @@ mod tests {
     use toml::Value as TomlValue;
     use url::Url;
 
-    use super::{
-        write_search_route, SearchTemplateState, SEARCH_DATA_FILE,
-    };
+    use super::{write_search_route, SearchTemplateState, SEARCH_DATA_FILE};
 
     fn contains_forbidden_pagefind_reference(path: &Path, src_path: &Path) -> bool {
         let relative = path.strip_prefix(src_path).unwrap();
