@@ -3240,7 +3240,7 @@ mod phase7_timestamp_regressions {
         let path = content.join("00001.md");
         std::fs::write(&path, "no committed history").unwrap();
         let expected = filesystem_modified(&path).unwrap();
-        let mut history = crate::last_modified::History::new([path.clone()]);
+        let mut history = crate::last_modified::History::new(vec![path.clone(); 128]);
         assert_eq!(last_modified(&path, &mut history).unwrap(), expected);
     }
 

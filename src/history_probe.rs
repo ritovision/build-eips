@@ -10,5 +10,8 @@ fn preprocess_real_corpus() {
     );
     let start = std::time::Instant::now();
     crate::markdown::preprocess(&root.join("content"), None).unwrap();
-    println!("PHASE7_PREPROCESS_SECONDS={:.9}", start.elapsed().as_secs_f64());
+    println!(
+        "PHASE7_PREPROCESS_SECONDS={:.9}",
+        start.elapsed().as_secs_f64()
+    );
 }
