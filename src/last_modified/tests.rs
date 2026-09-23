@@ -544,3 +544,76 @@ fn empty_root_batch_preserves_no_history_for_all_uncommitted_paths() {
     std::fs::write(f.root.join(A), "uncommitted").unwrap();
     assert_eq!(f.check(&[A, B]), vec![None, None]);
 }
+
+#[test]
+fn native_page_git_pathspec_characters_keep_the_original_query_semantics() {
+    let f = Fixture::new();
+    let pattern = "content/native[1].md";
+    let matched = "content/native1.md";
+    let root = f.commit(
+        &[
+            (pattern, "native", FileMode::Blob),
+            (matched, "first", FileMode::Blob),
+        ],
+        &[],
+        T,
+    );
+    f.commit(
+        &[
+            (pattern, "native", FileMode::Blob),
+            (matched, "second", FileMode::Blob),
+        ],
+        &[root],
+        T + 10,
+    );
+    let path = f.root.join(pattern);
+    // The old command is a Git pathspec, not a forced-literal tree lookup.
+    // Its matching other native page is newer, despite this file being unchanged.
+    assert_eq!(oracle(&path), Some(T + 10));
+    let mut history = History::new(vec![path.clone(); 128]);
+    assert_eq!(history.timestamp(&path).unwrap(), oracle(&path));
+}
+
+#[test]
+fn case_insensitive_git_pathspec_environment_keeps_the_original_query() {
+    // Use a child test process so this environment setting never races with
+    // other tests' Git queries in the parallel Rust suite.
+    const CHILD: &str = "BUILD_EIPS_HISTORY_ICASE_TEST_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args(["last_modified::tests::case_insensitive_git_pathspec_environment_keeps_the_original_query", "--exact", "--nocapture"])
+            .env(CHILD, "1")
+            .env("GIT_ICASE_PATHSPECS", "1")
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let f = Fixture::new();
+    let lower = "content/native.md";
+    let upper = "content/NATIVE.md";
+    let root = f.commit(
+        &[
+            (lower, "native", FileMode::Blob),
+            (upper, "first", FileMode::Blob),
+        ],
+        &[],
+        T,
+    );
+    f.commit(
+        &[
+            (lower, "native", FileMode::Blob),
+            (upper, "second", FileMode::Blob),
+        ],
+        &[root],
+        T + 10,
+    );
+    let path = f.root.join(lower);
+    assert_eq!(oracle(&path), Some(T + 10));
+    let mut history = History::new(vec![path.clone(); 128]);
+    assert_eq!(history.timestamp(&path).unwrap(), oracle(&path));
+}

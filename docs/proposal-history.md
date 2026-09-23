@@ -8,7 +8,10 @@ already-generated pages, and ignored missing live paths do not request history.
 
 History is scoped to a single Markdown preprocessing call. Small requests (fewer
 than 128 admitted paths) use the direct `git log -1 --pretty=format:%ct -- <name>`
-query. Large requests share one history walk and tree comparisons. The threshold
+query. Git-special native page basenames and an explicitly set
+`GIT_ICASE_PATHSPECS` also retain that exact query, preserving Git pattern/magic
+and case-matching semantics rather than treating a pathspec as a literal path.
+Other large requests share one history walk and tree comparisons. The threshold
 avoids imposing whole-history startup cost on small live edits. There is no
 persistent cache, invalidation protocol, CLI switch, or alternate timestamp policy.
 

@@ -29,7 +29,18 @@ impl History {
         let paths = paths.into_iter().collect::<Vec<_>>();
         // Measured whole-history startup is more expensive than small direct
         // queries. Keep live edits/targeted preparation on the exact Git query.
-        let direct = (paths.len() < 128).then_some(true);
+        // The original basename argument is a Git pathspec. Keep Git in charge
+        // of pattern/magic matching and explicitly case-insensitive pathspecs;
+        // the tree-diff batch compares literal repository paths.
+        let special_pathspecs = std::env::var_os("GIT_ICASE_PATHSPECS").is_some()
+            || paths.iter().any(|path| {
+                let name = path.file_name().unwrap_or_default().as_encoded_bytes();
+                name.first() == Some(&b':')
+                    || name
+                        .iter()
+                        .any(|byte| matches!(byte, b'*' | b'?' | b'[' | b'\\'))
+            });
+        let direct = (paths.len() < 128 || special_pathspecs).then_some(true);
         Self {
             paths,
             timestamps: None,
