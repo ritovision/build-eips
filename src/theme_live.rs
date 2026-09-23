@@ -112,6 +112,8 @@ impl LiveTheme {
         crate::source_reads::validate_tree(&self.stage).whatever_context(
             "candidate theme source-read policy rejected; last-good theme retained",
         )?;
+        crate::reserved::validate_inputs(&self.stage)
+            .whatever_context("candidate theme occupies generated paths; last-good theme retained")?;
         if source_stamp(source)? != snapshot.stamp || file_stamps(source, &affected)? != before {
             snafu::whatever!("theme changed during staging; last-good theme retained until retry");
         }

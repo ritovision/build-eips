@@ -9,7 +9,7 @@
 use std::{
     collections::BTreeSet,
     io::ErrorKind,
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
 };
 
 use log::{debug, info};
@@ -370,7 +370,6 @@ fn resolve_search_config(
             corpus: SearchCorpusConfig {
                 enabled: settings.corpus.enabled,
                 format: settings.corpus.format,
-                output: settings.corpus.output.clone(),
             },
         })
         .unwrap_or_default();
@@ -386,41 +385,7 @@ fn resolve_search_config(
         }
     }
 
-    validate_search_corpus_output(&search.corpus.output)?;
-
     Ok(search)
-}
-
-fn validate_search_corpus_output(output: &Path) -> Result<(), Whatever> {
-    if output.as_os_str().is_empty() || output.is_absolute() {
-        snafu::whatever!(
-            "search corpus output path `{}` must be relative to the rendered output directory",
-            output.to_string_lossy()
-        );
-    }
-
-    for component in output.components() {
-        match component {
-            Component::Normal(value) if value == "pagefind" => {
-                snafu::whatever!(
-                    "search corpus output path `{}` must not be under `pagefind`",
-                    output.to_string_lossy()
-                );
-            }
-            Component::Normal(_) => {}
-            Component::CurDir
-            | Component::ParentDir
-            | Component::RootDir
-            | Component::Prefix(_) => {
-                snafu::whatever!(
-                    "search corpus output path `{}` must contain only safe relative path components",
-                    output.to_string_lossy()
-                );
-            }
-        }
-    }
-
-    Ok(())
 }
 
 pub(crate) fn resolve_execution(args: &Args) -> Result<ResolvedExecution, Whatever> {

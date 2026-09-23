@@ -15,13 +15,12 @@ mod splitter;
 #[cfg(test)]
 mod tests;
 
-use std::path::Path;
 
 use snafu::{ResultExt, Whatever};
 
 use crate::{config::SearchCorpusFormat, search::normalized_base_path};
 
-use super::{SearchCorpusRequest, SearchCorpusSummary, DEFAULT_CORPUS_OUTPUT_FILE};
+use super::{SearchCorpusRequest, SearchCorpusSummary, SITE_CORPUS_PATH};
 use schema::{CorpusOutput, CORPUS_VERSION};
 
 pub(super) fn reconcile_corpus(
@@ -36,18 +35,11 @@ pub(super) fn reconcile_corpus(
                 request.output_path.to_string_lossy()
             )
         })?;
-    let default_output = Path::new(DEFAULT_CORPUS_OUTPUT_FILE);
-    let configured_output = request.config.output.as_path();
-
-    output::cleanup_known_corpus_artifact(&output_path, default_output)?;
-    if configured_output != default_output {
-        output::cleanup_known_corpus_artifact(&output_path, configured_output)?;
-    }
-
     if !request.config.enabled {
         return Ok(None);
     }
 
+    crate::reserved::ensure_absent(&output_path, SITE_CORPUS_PATH)?;
     let corpus = extract::extract_corpus(&output_path, &normalized_base_path(&request.base_url))?;
     let documents = match request.config.format {
         SearchCorpusFormat::Documents | SearchCorpusFormat::DocumentsAndChunks => corpus.documents,
@@ -64,7 +56,7 @@ pub(super) fn reconcile_corpus(
     };
     let documents = output.documents.len();
     let chunks = output.chunks.len();
-    let output_file = output::write_corpus_file(&output_path, configured_output, &output)?;
+    let output_file = output::write_corpus_file(&output_path, &output)?;
 
     Ok(Some(SearchCorpusSummary {
         documents,

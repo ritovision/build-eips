@@ -145,3 +145,20 @@ build's original host, so build for the desired preview host when browsing local
 During replacement, preview refuses incomplete or cross-generation reads with
 HTTP 503. The receipt is not served as a public endpoint. Rebuild prerelease
 output that lacks a receipt; there is no compatibility/migration path.
+
+## Generated locations and site corpus
+
+`src/reserved.rs` is the finite ownership list for generated search route/data,
+proposal metadata, hardfork routes, Pagefind, `assets/generated/`, the internal
+completed-build receipt and theme mount. Raw project/theme input, explicit native
+Zola page paths/slugs/aliases and configured taxonomy/feed routes are checked
+before generation or live admission. A collision is an error, including with
+search/corpus disabled. Post-Zola Pagefind/corpus destinations must still be empty;
+indexing no longer deletes output merely because it resembles an older index.
+
+Normal `build --search-corpus` output is always
+`assets/generated/search/corpus.json`; `[search.corpus]` has only `enabled` and
+`format`. The removed `output` key is rejected with an actionable error, not
+migrated. Standalone `corpus --output` is separately planned, not implemented here.
+Ordinary authored files outside the reserved paths, including a file named
+`search-corpus.json`, are not deleted as presumed legacy data.

@@ -5,8 +5,6 @@
  */
 
 use std::{
-    fs,
-    io::ErrorKind,
     path::{Path, PathBuf},
 };
 
@@ -69,69 +67,9 @@ fn prepare_pagefind_output_path(output_path: &Path) -> Result<(PathBuf, PathBuf)
     })?;
     let pagefind_path = output_path.join(PAGEFIND_DIR);
 
-    cleanup_stale_pagefind_path(&output_path, &pagefind_path)?;
+    crate::reserved::ensure_absent(&output_path, PAGEFIND_DIR)?;
 
     Ok((output_path, pagefind_path))
-}
-
-fn cleanup_stale_pagefind_path(output_path: &Path, pagefind_path: &Path) -> Result<(), Whatever> {
-    let metadata = match fs::symlink_metadata(pagefind_path) {
-        Ok(metadata) => metadata,
-        Err(error) if matches!(error.kind(), ErrorKind::NotFound | ErrorKind::NotADirectory) => {
-            return Ok(());
-        }
-        Err(error) => {
-            return Err(error).with_whatever_context(|_| {
-                format!(
-                    "unable to inspect stale Pagefind output path `{}`",
-                    pagefind_path.to_string_lossy()
-                )
-            });
-        }
-    };
-
-    let cleanup_target = pagefind_path.canonicalize().with_whatever_context(|_| {
-        format!(
-            "unable to resolve stale Pagefind output path `{}`",
-            pagefind_path.to_string_lossy()
-        )
-    })?;
-
-    if !is_strict_descendant(&cleanup_target, output_path) {
-        snafu::whatever!(
-            "refusing to clean Pagefind output path `{}` because it resolves outside rendered output directory `{}`",
-            cleanup_target.to_string_lossy(),
-            output_path.to_string_lossy()
-        );
-    }
-
-    let file_type = metadata.file_type();
-    if file_type.is_symlink() || metadata.is_file() {
-        fs::remove_file(pagefind_path).with_whatever_context(|_| {
-            format!(
-                "unable to remove stale Pagefind output file `{}`",
-                pagefind_path.to_string_lossy()
-            )
-        })?;
-    } else if metadata.is_dir() {
-        fs::remove_dir_all(pagefind_path).with_whatever_context(|_| {
-            format!(
-                "unable to remove stale Pagefind output directory `{}`",
-                pagefind_path.to_string_lossy()
-            )
-        })?;
-    } else {
-        snafu::whatever!(
-            "refusing to clean unsupported Pagefind output path type `{}`",
-            pagefind_path.to_string_lossy()
-        );
-    }
-
-    Ok(())
-}
-
-fn is_strict_descendant(path: &Path, parent: &Path) -> bool {
-    path.starts_with(parent) && path != parent
 }
 
 fn pagefind_path_arg(path: &Path, role: &str) -> Result<String, Whatever> {
@@ -220,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_pagefind_output_is_removed_before_indexing() {
+    fn authored_pagefind_output_is_refused_without_deletion() {
         let temp = TempDir::new().unwrap();
         let output_path = rendered_site(temp.path());
         let stale_path = output_path.join(PAGEFIND_DIR).join("stale.txt");
@@ -230,18 +168,16 @@ mod tests {
             "stale",
         );
 
-        index_site(SearchIndexRequest {
+        let error = index_site(SearchIndexRequest {
             output_path: output_path.clone(),
-        })
-        .unwrap();
-
-        assert!(!stale_path.exists());
-        assert_pagefind_artifacts(&output_path.join(PAGEFIND_DIR));
+        }).unwrap_err().to_string();
+        assert!(error.contains("reserved generated path"));
+        assert_eq!(std::fs::read_to_string(stale_path).unwrap(), "stale");
     }
 
     #[cfg(target_family = "unix")]
     #[test]
-    fn stale_pagefind_cleanup_rejects_targets_outside_output_tree() {
+    fn pagefind_reservation_rejects_links_without_deletion() {
         use std::os::unix::fs::symlink;
 
         let temp = TempDir::new().unwrap();
@@ -255,7 +191,7 @@ mod tests {
             .unwrap_err()
             .to_string();
 
-        assert!(error.contains("refusing to clean Pagefind output path"));
+        assert!(error.contains("reserved generated path"));
         assert!(outside_path.join("external.txt").is_file());
     }
 }

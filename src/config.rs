@@ -65,6 +65,8 @@ pub enum Error {
 
 #[derive(Debug, Snafu)]
 pub enum WorkspaceError {
+    #[snafu(display("workspace config `{}` uses removed [search.corpus].output; remove that key: normal site corpus is fixed at assets/generated/search/corpus.json. Standalone `build-eips corpus --output` is separate planned export work", config_path.display()))]
+    RemovedCorpusOutput { config_path: PathBuf },
     #[snafu(display("i/o error while accessing `{}`", path.to_string_lossy()))]
     Fs {
         path: PathBuf,
@@ -391,8 +393,6 @@ pub struct SearchCorpusSettings {
     /// Which corpus views to emit.
     pub format: SearchCorpusFormat,
 
-    /// Corpus output path relative to the rendered output directory.
-    pub output: PathBuf,
 }
 
 impl Default for SearchCorpusSettings {
@@ -400,7 +400,6 @@ impl Default for SearchCorpusSettings {
         Self {
             enabled: false,
             format: SearchCorpusFormat::default(),
-            output: PathBuf::from("search-corpus.json"),
         }
     }
 }
@@ -523,6 +522,10 @@ impl LoadedWorkspaceConfig {
         let contents = std::fs::read_to_string(&config_path).with_context(|_| FsSnafu {
             path: config_path.clone(),
         })?;
+        let value: toml::Value = toml::from_str(&contents).with_context(|_| WorkspaceParseSnafu { config_path: config_path.clone() })?;
+        if value.get("search").and_then(|v| v.get("corpus")).and_then(|v| v.get("output")).is_some() {
+            return Err(WorkspaceError::RemovedCorpusOutput { config_path });
+        }
         let config =
             toml::from_str::<WorkspaceConfig>(&contents).with_context(|_| WorkspaceParseSnafu {
                 config_path: config_path.clone(),
@@ -810,10 +813,6 @@ mod workspace_tests {
             config.search_settings().corpus.format,
             SearchCorpusFormat::DocumentsAndChunks
         );
-        assert_eq!(
-            config.search_settings().corpus.output,
-            PathBuf::from("search-corpus.json")
-        );
     }
 
     #[test]
@@ -836,7 +835,7 @@ mod workspace_tests {
         assert!(original.contains("[search.corpus]"));
         assert!(original.contains("enabled = false"));
         assert!(original.contains("format = \"documents-and-chunks\""));
-        assert!(original.contains("output = \"search-corpus.json\""));
+
         assert!(!original.contains("default_profile"));
         assert!(!original.contains("[profiles"));
     }
@@ -1041,7 +1040,6 @@ pagefind = false
 [search.corpus]
 enabled = true
 format = "chunks"
-output = "debug/search-corpus.json"
 "#,
         );
 
@@ -1052,10 +1050,6 @@ output = "debug/search-corpus.json"
         assert_eq!(
             config.search_settings().corpus.format,
             SearchCorpusFormat::Chunks
-        );
-        assert_eq!(
-            config.search_settings().corpus.output,
-            PathBuf::from("debug/search-corpus.json")
         );
     }
 
@@ -1269,5 +1263,18 @@ commit = "abc123"
             "https://example.test/ERCs.git"
         );
         assert_eq!(active_repo.theme.commit, "abc123");
+    }
+}
+
+#[cfg(test)]
+mod removed_corpus_setting_regression {
+    #[test]
+    fn prerelease_output_key_is_refused_even_when_corpus_is_disabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(".build-eips.toml");
+        std::fs::write(&path, "[search.corpus]\nenabled = false\noutput = 'index.html'\n").unwrap();
+        let error = super::LoadedWorkspaceConfig::from_path(&path).unwrap_err().to_string();
+        assert!(error.contains("removed [search.corpus].output"), "{error}");
+        assert!(error.contains("assets/generated/search/corpus.json"), "{error}");
     }
 }

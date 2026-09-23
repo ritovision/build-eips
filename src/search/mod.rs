@@ -21,9 +21,8 @@ mod corpus;
 mod pagefind;
 
 const SEARCH_ROUTE_FILE: &str = "search.md";
-const SEARCH_ROUTE_DIR: &str = "search";
 pub(crate) const SEARCH_DATA_FILE: &str = "build_eips_search.toml";
-pub(crate) const DEFAULT_CORPUS_OUTPUT_FILE: &str = "search-corpus.json";
+pub(crate) const SITE_CORPUS_PATH: &str = "assets/generated/search/corpus.json";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchConfig {
@@ -44,7 +43,6 @@ impl Default for SearchConfig {
 pub(crate) struct SearchCorpusConfig {
     pub(crate) enabled: bool,
     pub(crate) format: SearchCorpusFormat,
-    pub(crate) output: PathBuf,
 }
 
 impl Default for SearchCorpusConfig {
@@ -52,7 +50,6 @@ impl Default for SearchCorpusConfig {
         Self {
             enabled: false,
             format: SearchCorpusFormat::default(),
-            output: PathBuf::from(DEFAULT_CORPUS_OUTPUT_FILE),
         }
     }
 }
@@ -130,38 +127,6 @@ pub(crate) fn reconcile_corpus(
     request: SearchCorpusRequest,
 ) -> Result<Option<SearchCorpusSummary>, Whatever> {
     corpus::reconcile_corpus(request)
-}
-
-pub(crate) fn ensure_search_route_available(content_path: &Path) -> Result<(), Whatever> {
-    for relative_path in [
-        Path::new(SEARCH_ROUTE_FILE).to_path_buf(),
-        Path::new(SEARCH_ROUTE_DIR).join("index.md"),
-        Path::new(SEARCH_ROUTE_DIR).join("_index.md"),
-        Path::new(SEARCH_ROUTE_DIR).to_path_buf(),
-    ] {
-        let candidate = content_path.join(&relative_path);
-        match std::fs::symlink_metadata(&candidate) {
-            Ok(_) => {
-                snafu::whatever!(
-                    "materialized content path `{}` collides with the generated `/search/` route; refusing to overwrite user-authored content",
-                    candidate.to_string_lossy()
-                );
-            }
-            Err(error)
-                if matches!(
-                    error.kind(),
-                    std::io::ErrorKind::NotFound | std::io::ErrorKind::NotADirectory
-                ) => {}
-            Err(error) => {
-                snafu::whatever!(
-                    "unable to inspect potential search route collision `{}`: {error}",
-                    candidate.to_string_lossy()
-                );
-            }
-        }
-    }
-
-    Ok(())
 }
 
 pub(crate) fn write_search_route(
@@ -269,7 +234,7 @@ mod tests {
     use url::Url;
 
     use super::{
-        ensure_search_route_available, write_search_route, SearchTemplateState, SEARCH_DATA_FILE,
+        write_search_route, SearchTemplateState, SEARCH_DATA_FILE,
     };
 
     fn contains_forbidden_pagefind_reference(path: &Path, src_path: &Path) -> bool {
@@ -434,11 +399,11 @@ mod tests {
             let content_path = temp.path().join("content");
             write_file(temp.path(), relative, "user content\n");
 
-            let error = ensure_search_route_available(&content_path)
+            let error = crate::reserved::validate_inputs(content_path.parent().unwrap())
                 .unwrap_err()
                 .to_string();
 
-            assert!(error.contains("collides with the generated `/search/` route"));
+            assert!(error.contains("reserved generated path"));
             assert!(error.contains("content/search"));
         }
     }

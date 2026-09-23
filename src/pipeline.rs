@@ -38,6 +38,8 @@ fn prepare_theme_for_zola(
         .whatever_context("unable to materialize workspace-local theme")?;
     crate::source_reads::validate_tree(&mounted_theme_dir)
         .whatever_context("workspace-local theme violates source-read policy")?;
+    crate::reserved::validate_inputs(&mounted_theme_dir)
+        .whatever_context("theme occupies generated paths")?;
 
     Ok((
         mounted_theme_dir.clone(),
@@ -209,11 +211,10 @@ impl Prepared {
             &repository_use,
             source_materialization,
         )?;
-        search::ensure_search_route_available(&content_path)
-            .whatever_context("unable to reserve generated search route")?;
-
         crate::source_reads::validate_tree(&repo_path)
             .whatever_context("prepared proposal input violates source-read policy")?;
+        crate::reserved::validate_inputs(&repo_path)
+            .whatever_context("authored input occupies generated paths")?;
         let only_plan = only
             .map(|selected_numbers| OnlyRenderPlan::build(&content_path, selected_numbers))
             .transpose()
@@ -257,6 +258,7 @@ impl Prepared {
             base_url.as_str(),
         )
         .whatever_context("zola build failed")?;
+        crate::reserved::validate_rendered(&candidate_output)?;
         let _ = run_search_index(SearchIndexMode::Build, &candidate_output, &self.search)?;
         let _ = run_search_corpus(
             SearchIndexMode::Build,

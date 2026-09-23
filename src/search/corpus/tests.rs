@@ -9,7 +9,7 @@ use url::Url;
 
 use crate::{
     config::SearchCorpusFormat,
-    search::{SearchCorpusConfig, SearchCorpusRequest, DEFAULT_CORPUS_OUTPUT_FILE},
+    search::{SearchCorpusConfig, SearchCorpusRequest, SITE_CORPUS_PATH},
 };
 
 use super::{
@@ -30,7 +30,6 @@ fn request(
     output_path: PathBuf,
     enabled: bool,
     format: SearchCorpusFormat,
-    output: &str,
 ) -> SearchCorpusRequest {
     SearchCorpusRequest {
         output_path,
@@ -38,7 +37,6 @@ fn request(
         config: SearchCorpusConfig {
             enabled,
             format,
-            output: PathBuf::from(output),
         },
     }
 }
@@ -97,14 +95,13 @@ fn corpus_extracts_rendered_documents_chunks_and_pagefind_hooks() {
         output.clone(),
         true,
         SearchCorpusFormat::DocumentsAndChunks,
-        DEFAULT_CORPUS_OUTPUT_FILE,
     ))
     .unwrap()
     .unwrap();
 
     assert_eq!(summary.documents, 1);
     assert_eq!(summary.chunks, 3);
-    let output_file = output.join(DEFAULT_CORPUS_OUTPUT_FILE);
+    let output_file = output.join(SITE_CORPUS_PATH);
     assert_eq!(summary.output_path, output_file);
     let raw = std::fs::read_to_string(&output_file).unwrap();
     assert!(raw.ends_with('\n'));
@@ -201,12 +198,11 @@ fn long_prose_section_emits_bounded_retrieval_parts() {
         output.clone(),
         true,
         SearchCorpusFormat::DocumentsAndChunks,
-        DEFAULT_CORPUS_OUTPUT_FILE,
     ))
     .unwrap()
     .unwrap();
 
-    let json = read_json(&output.join(DEFAULT_CORPUS_OUTPUT_FILE));
+    let json = read_json(&output.join(SITE_CORPUS_PATH));
     let document = &json["documents"][0];
     assert!(document["text"]
         .as_str()
@@ -281,12 +277,11 @@ fn code_table_and_hex_sections_emit_expected_block_kinds() {
         output.clone(),
         true,
         SearchCorpusFormat::Chunks,
-        DEFAULT_CORPUS_OUTPUT_FILE,
     ))
     .unwrap()
     .unwrap();
 
-    let json = read_json(&output.join(DEFAULT_CORPUS_OUTPUT_FILE));
+    let json = read_json(&output.join(SITE_CORPUS_PATH));
     assert!(json["documents"].as_array().unwrap().is_empty());
     let chunks = json["chunks"].as_array().unwrap();
     assert!(chunks
@@ -355,21 +350,21 @@ fn corpus_output_is_deterministic_across_repeated_extractions() {
         output.clone(),
         true,
         SearchCorpusFormat::DocumentsAndChunks,
-        DEFAULT_CORPUS_OUTPUT_FILE,
     ))
     .unwrap()
     .unwrap();
-    let first = std::fs::read_to_string(output.join(DEFAULT_CORPUS_OUTPUT_FILE)).unwrap();
+    let first = std::fs::read_to_string(output.join(SITE_CORPUS_PATH)).unwrap();
+    // Simulate an independent fresh candidate, not production stale cleanup.
+    std::fs::remove_file(output.join(SITE_CORPUS_PATH)).unwrap();
 
     reconcile_corpus(request(
         output.clone(),
         true,
         SearchCorpusFormat::DocumentsAndChunks,
-        DEFAULT_CORPUS_OUTPUT_FILE,
     ))
     .unwrap()
     .unwrap();
-    let second = std::fs::read_to_string(output.join(DEFAULT_CORPUS_OUTPUT_FILE)).unwrap();
+    let second = std::fs::read_to_string(output.join(SITE_CORPUS_PATH)).unwrap();
 
     assert_eq!(first, second);
 }
@@ -404,56 +399,21 @@ fn chunk_record_field_order_is_stable() {
 }
 
 #[test]
-fn corpus_formats_and_cleanup_reconcile_known_artifacts() {
-    let temp = TempDir::new().unwrap();
-    let output = temp.path().join("output");
-    write_file(
-        &output,
-        "1/index.html",
-        r#"<main data-pagefind-body><span data-pagefind-meta="proposal:EIP-1"></span><h2 id="a">A</h2><p>Text.</p></main>"#,
-    );
-    write_file(&output, DEFAULT_CORPUS_OUTPUT_FILE, "stale default");
-
-    let summary = reconcile_corpus(request(
-        output.clone(),
-        true,
-        SearchCorpusFormat::Chunks,
-        "debug/corpus.json",
-    ))
-    .unwrap()
-    .unwrap();
-
-    assert_eq!(summary.documents, 0);
-    assert_eq!(summary.chunks, 1);
-    assert!(!output.join(DEFAULT_CORPUS_OUTPUT_FILE).exists());
-    let json = read_json(&output.join("debug/corpus.json"));
-    assert!(json["documents"].as_array().unwrap().is_empty());
-    assert_eq!(json["chunks"].as_array().unwrap().len(), 1);
-
-    let summary = reconcile_corpus(request(
-        output.clone(),
-        true,
-        SearchCorpusFormat::Documents,
-        "debug/corpus.json",
-    ))
-    .unwrap()
-    .unwrap();
-    assert_eq!(summary.documents, 1);
-    assert_eq!(summary.chunks, 0);
-    let json = read_json(&output.join("debug/corpus.json"));
-    assert_eq!(json["documents"].as_array().unwrap().len(), 1);
-    assert!(json["chunks"].as_array().unwrap().is_empty());
-
-    let summary = reconcile_corpus(request(
-        output.clone(),
-        false,
-        SearchCorpusFormat::DocumentsAndChunks,
-        "debug/corpus.json",
-    ))
-    .unwrap();
-    assert!(summary.is_none());
-    assert!(!output.join(DEFAULT_CORPUS_OUTPUT_FILE).exists());
-    assert!(!output.join("debug/corpus.json").exists());
+fn corpus_formats_use_fixed_path_and_disabled_mode_never_deletes_content() {
+    for format in [SearchCorpusFormat::Chunks, SearchCorpusFormat::Documents, SearchCorpusFormat::DocumentsAndChunks] {
+        let temp = TempDir::new().unwrap();
+        let output = temp.path().join("output");
+        write_file(&output, "1/index.html", r#"<main data-pagefind-body><span data-pagefind-meta="proposal:EIP-1"></span><h2 id="a">A</h2><p>Text.</p></main>"#);
+        write_file(&output, "search-corpus.json", "authored historical filename");
+        let summary = reconcile_corpus(request(output.clone(), true, format)).unwrap().unwrap();
+        assert_eq!(summary.output_path, output.join(SITE_CORPUS_PATH));
+        assert_eq!(summary.documents, usize::from(format != SearchCorpusFormat::Chunks));
+        assert_eq!(summary.chunks, usize::from(format != SearchCorpusFormat::Documents));
+        let bytes = std::fs::read(output.join(SITE_CORPUS_PATH)).unwrap();
+        assert!(reconcile_corpus(request(output.clone(), false, format)).unwrap().is_none());
+        assert_eq!(std::fs::read(output.join(SITE_CORPUS_PATH)).unwrap(), bytes);
+        assert_eq!(std::fs::read_to_string(output.join("search-corpus.json")).unwrap(), "authored historical filename");
+    }
 }
 
 #[test]
@@ -471,14 +431,13 @@ fn corpus_skips_pages_without_body_and_pagefind_output() {
         output.clone(),
         true,
         SearchCorpusFormat::DocumentsAndChunks,
-        DEFAULT_CORPUS_OUTPUT_FILE,
     ))
     .unwrap()
     .unwrap();
 
     assert_eq!(summary.documents, 0);
     assert_eq!(summary.chunks, 0);
-    let json = read_json(&output.join(DEFAULT_CORPUS_OUTPUT_FILE));
+    let json = read_json(&output.join(SITE_CORPUS_PATH));
     assert!(json["documents"].as_array().unwrap().is_empty());
     assert!(json["chunks"].as_array().unwrap().is_empty());
 }
@@ -507,12 +466,11 @@ fn corpus_uses_url_and_heading_fallbacks_when_metadata_or_ids_are_absent() {
         output.clone(),
         true,
         SearchCorpusFormat::DocumentsAndChunks,
-        DEFAULT_CORPUS_OUTPUT_FILE,
     ))
     .unwrap()
     .unwrap();
 
-    let json = read_json(&output.join(DEFAULT_CORPUS_OUTPUT_FILE));
+    let json = read_json(&output.join(SITE_CORPUS_PATH));
     let document = &json["documents"][0];
     assert_eq!(document["id"], "url:/EIPs/reference/page.html");
     assert_eq!(document["url"], "/EIPs/reference/page.html");
