@@ -85,8 +85,8 @@ fn oracle(path: &Path) -> Option<i64> {
 
 fn compare(root: &Path, paths: Vec<PathBuf>) -> Vec<Option<i64>> {
     let paths = paths.into_iter().map(|p| root.join(p)).collect::<Vec<_>>();
-    let batch = collect(&paths[0], &paths).unwrap();
-    let mut history = History::new(paths.iter().cloned());
+    let batch = collect(root, &paths).unwrap();
+    let mut history = History::new(root, paths.iter().cloned());
     paths
         .iter()
         .map(|p| {
@@ -101,6 +101,69 @@ fn compare(root: &Path, paths: Vec<PathBuf>) -> Vec<Option<i64>> {
 const A: &str = "content/00001.md";
 const B: &str = "content/00002.md";
 const T: i64 = 1_700_000_000;
+
+#[test]
+fn parent_component_batch_matches_canonical_paths_and_git_without_requiring_leaves() {
+    let f = Fixture::new();
+    let names = (0..128)
+        .map(|i| {
+            if i % 2 == 0 {
+                format!("content/{i:05}.md")
+            } else {
+                format!("content/{i:05}/index.md")
+            }
+        })
+        .collect::<Vec<_>>();
+    let mut files = names
+        .iter()
+        .map(|name| (name.as_str(), "original", FileMode::Blob))
+        .collect::<Vec<_>>();
+    let first = f.commit(&files, &[], T);
+    files[0].1 = "committed change";
+    f.commit(&files, &[first], T + 10);
+    std::fs::write(f.root.join(&names[1]), "uncommitted change").unwrap();
+    std::fs::remove_file(f.root.join(&names[2])).unwrap();
+    std::fs::write(f.root.join("content/new.md"), "untracked").unwrap();
+
+    let workspace = f._temp.path().join("workspace");
+    std::fs::create_dir(&workspace).unwrap();
+    let spelled_root = workspace.join("../repo");
+    let canonical_root = f.root.canonicalize().unwrap();
+    let mut names = names;
+    names.extend(["content/new.md".into(), "content/absent.md".into()]);
+    // A deleted live bundle may have neither its leaf nor its parent directory.
+    let missing_bundle = "content/missing/index.md";
+    let paths = names
+        .iter()
+        .map(|name| spelled_root.join(name))
+        .chain([spelled_root.join(missing_bundle)])
+        .collect::<Vec<_>>();
+    let canonical_paths = names
+        .iter()
+        .map(|name| canonical_root.join(name))
+        .chain([canonical_root.join(missing_bundle)])
+        .collect::<Vec<_>>();
+    let mut spelled = History::new(&spelled_root.join("content"), paths.iter().cloned());
+    let mut canonical = History::new(
+        &canonical_root.join("content"),
+        canonical_paths.iter().cloned(),
+    );
+    for (path, canonical_path) in paths.iter().zip(&canonical_paths).take(names.len()) {
+        let expected = oracle(canonical_path);
+        assert_eq!(oracle(path), expected);
+        assert_eq!(spelled.timestamp(path).unwrap(), expected);
+        assert_eq!(canonical.timestamp(canonical_path).unwrap(), expected);
+    }
+    assert_eq!(spelled.direct, Some(false));
+    assert_eq!(canonical.direct, Some(false));
+    let timestamps = spelled.timestamps.as_ref().unwrap();
+    assert_eq!(timestamps.len(), paths.len());
+    assert_eq!(timestamps[&spelled_root.join(missing_bundle)], None);
+    assert_eq!(timestamps[&paths[0]], Some(T + 10));
+    assert_eq!(timestamps[&paths[1]], Some(T));
+    assert_eq!(timestamps[&paths[2]], Some(T));
+    assert!(!timestamps.contains_key(&canonical_paths[0]));
+}
 
 #[test]
 fn linear_unrelated_and_uncommitted_changes_match_git() {
@@ -267,7 +330,7 @@ fn git_replacement_history_matches_git() {
 
 #[test]
 fn empty_batch_does_not_open_git() {
-    let _history = History::new(Vec::new());
+    let _history = History::new(Path::new("missing/content"), Vec::new());
 }
 
 #[test]
@@ -294,7 +357,7 @@ fn real_corpus_equivalence_and_benchmark() {
     paths.sort();
     let run_before = || paths.iter().map(|p| oracle(p)).collect::<Vec<_>>();
     let run_after = || {
-        let mut h = History::new(paths.iter().cloned());
+        let mut h = History::new(&root.join("content"), paths.iter().cloned());
         paths
             .iter()
             .map(|p| h.timestamp(p).unwrap())
@@ -335,7 +398,7 @@ fn real_corpus_equivalence_and_benchmark() {
             } {
                 let start = Instant::now();
                 let actual = if optimized {
-                    let mut h = History::new(subset.iter().cloned());
+                    let mut h = History::new(&root.join("content"), subset.iter().cloned());
                     subset
                         .iter()
                         .map(|p| h.timestamp(p).unwrap())
@@ -494,7 +557,7 @@ fn configured_rename_following_remains_gits_own_query() {
         .set_bool("log.follow", true)
         .unwrap();
     let path = f.root.join(bundle);
-    let mut history = History::new(vec![path.clone(); 128]);
+    let mut history = History::new(&f.root, vec![path.clone(); 128]);
     assert!(configured_history(&path).unwrap());
     assert_eq!(history.timestamp(&path).unwrap(), oracle(&path));
 }
@@ -510,7 +573,7 @@ fn signature_output_configuration_is_not_silently_disabled() {
         .unwrap();
     let path = f.root.join(A);
     assert!(configured_history(&path).unwrap());
-    let mut history = History::new(vec![path.clone(); 128]);
+    let mut history = History::new(&f.root, vec![path.clone(); 128]);
     assert_eq!(history.timestamp(&path).unwrap(), oracle(&path));
 }
 
@@ -532,7 +595,7 @@ fn empty_first_parent_is_not_pruned_when_an_absent_path_has_sibling_history() {
     // its filesystem fallback instead of treating this as a sibling deletion.
     assert_eq!(f.check(&[A, B]), vec![None, Some(T + 10)]);
     let path = f.root.join(A);
-    let mut history = History::new(vec![path.clone(); 128]);
+    let mut history = History::new(&f.root, vec![path.clone(); 128]);
     assert_eq!(history.timestamp(&path).unwrap(), None);
 }
 
@@ -570,7 +633,7 @@ fn native_page_git_pathspec_characters_keep_the_original_query_semantics() {
     // The old command is a Git pathspec, not a forced-literal tree lookup.
     // Its matching other native page is newer, despite this file being unchanged.
     assert_eq!(oracle(&path), Some(T + 10));
-    let mut history = History::new(vec![path.clone(); 128]);
+    let mut history = History::new(&f.root, vec![path.clone(); 128]);
     assert_eq!(history.timestamp(&path).unwrap(), oracle(&path));
 }
 
@@ -614,6 +677,6 @@ fn case_insensitive_git_pathspec_environment_keeps_the_original_query() {
     );
     let path = f.root.join(lower);
     assert_eq!(oracle(&path), Some(T + 10));
-    let mut history = History::new(vec![path.clone(); 128]);
+    let mut history = History::new(&f.root, vec![path.clone(); 128]);
     assert_eq!(history.timestamp(&path).unwrap(), oracle(&path));
 }

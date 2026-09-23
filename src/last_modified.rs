@@ -19,13 +19,14 @@ use git2::{ErrorCode, Oid, Repository, Tree};
 use snafu::{OptionExt, ResultExt, Whatever};
 
 pub(crate) struct History {
+    root: PathBuf,
     paths: Vec<PathBuf>,
     timestamps: Option<BTreeMap<PathBuf, Option<i64>>>,
     direct: Option<bool>,
 }
 
 impl History {
-    pub(crate) fn new(paths: impl IntoIterator<Item = PathBuf>) -> Self {
+    pub(crate) fn new(root: &Path, paths: impl IntoIterator<Item = PathBuf>) -> Self {
         let paths = paths.into_iter().collect::<Vec<_>>();
         // Measured whole-history startup is more expensive than small direct
         // queries. Keep live edits/targeted preparation on the exact Git query.
@@ -42,6 +43,7 @@ impl History {
             });
         let direct = (paths.len() < 128 || special_pathspecs).then_some(true);
         Self {
+            root: root.to_path_buf(),
             paths,
             timestamps: None,
             direct,
@@ -58,7 +60,7 @@ impl History {
             return direct_timestamp(path);
         }
         if self.timestamps.is_none() {
-            self.timestamps = Some(collect(path, &self.paths)?);
+            self.timestamps = Some(collect(&self.root, &self.paths)?);
         }
         self.timestamps
             .as_ref()
@@ -147,31 +149,30 @@ fn entry(tree: &Tree<'_>, path: &Path) -> Result<Option<(Oid, i32)>, Whatever> {
     }
 }
 
-fn collect(first: &Path, paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, Option<i64>>, Whatever> {
-    let parent = first
-        .parent()
-        .whatever_context("proposal history path has no parent")?;
-    let repo = Repository::discover(parent)
+fn collect(root: &Path, paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, Option<i64>>, Whatever> {
+    // Resolve the shared root only when history is requested. Admitted live
+    // paths may have missing leaves or bundle directories; do not resolve them.
+    let resolved_root = root
+        .canonicalize()
+        .whatever_context("unable to resolve proposal history root")?;
+    let repo = Repository::discover(&resolved_root)
         .whatever_context("unable to open proposal history repository")?;
     let workdir = repo
         .workdir()
-        .whatever_context("proposal history repository has no working directory")?;
-    let cwd =
-        std::env::current_dir().whatever_context("unable to resolve proposal history paths")?;
+        .whatever_context("proposal history repository has no working directory")?
+        .canonicalize()
+        .whatever_context("unable to resolve proposal history working directory")?;
+    let relative_root = resolved_root
+        .strip_prefix(&workdir)
+        .whatever_context("proposal history root is outside repository")?;
     let relative = paths
         .iter()
         .map(|path| {
-            let absolute = if path.is_absolute() {
-                path.clone()
-            } else {
-                cwd.join(path)
-            };
-            absolute
-                .strip_prefix(workdir)
-                .map(Path::to_path_buf)
+            path.strip_prefix(root)
+                .map(|relative| relative_root.join(relative))
                 .with_whatever_context(|_| {
                     format!(
-                        "proposal history path is outside repository: `{}`",
+                        "proposal history path is outside content root: `{}`",
                         path.display()
                     )
                 })
@@ -183,7 +184,7 @@ fn collect(first: &Path, paths: &[PathBuf]) -> Result<BTreeMap<PathBuf, Option<i
     // no-history result into a deletion timestamp. Git supplies shallow and
     // replacement parents/trees; per-path simplification happens only below.
     let mut command = Command::new("git");
-    command.current_dir(workdir).args([
+    command.current_dir(&workdir).args([
         "log",
         "--topo-order",
         "--no-show-signature",

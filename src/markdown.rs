@@ -257,7 +257,10 @@ fn filesystem_modified(p: &Path) -> Result<Datetime, Whatever> {
     Ok(date_time.to_rfc3339().parse().unwrap())
 }
 
-fn last_modified(p: &Path, history: &mut crate::last_modified::History) -> Result<Datetime, Whatever> {
+fn last_modified(
+    p: &Path,
+    history: &mut crate::last_modified::History,
+) -> Result<Datetime, Whatever> {
     let Some(unix) = history.timestamp(p)? else {
         debug!(
             "falling back to filesystem modified time for `{}` because git has no timestamp for the current path",
@@ -812,7 +815,7 @@ pub(crate) fn preprocess_with_network_upgrades(
         format!("could not read directory `{}`", root_path.to_string_lossy())
     })?;
     let dirs: Vec<_> = dir.collect();
-    let mut history = crate::last_modified::History::new(dirs.iter().filter_map(|entry| {
+    let history_paths = dirs.iter().filter_map(|entry| {
         let entry = entry.as_ref().ok()?;
         let path = if entry.file_type().ok()?.is_dir() {
             entry.path().join("index.md")
@@ -827,7 +830,8 @@ pub(crate) fn preprocess_with_network_upgrades(
             return None;
         }
         Some(path)
-    }));
+    });
+    let mut history = crate::last_modified::History::new(root_path, history_paths);
 
     info!("preprocessing markdown");
 
@@ -982,7 +986,7 @@ pub(crate) fn preprocess_paths_with_network_upgrades(
         eips.insert(path);
     }
 
-    let mut history = crate::last_modified::History::new(eips.iter().cloned());
+    let mut history = crate::last_modified::History::new(root_path, eips.iter().cloned());
     for path in eips {
         process_eip(
             root_path,
@@ -3228,19 +3232,34 @@ mod phase7_timestamp_regressions {
     use super::*;
 
     #[test]
+    fn missing_live_batch_does_not_require_content_root_or_git() {
+        let temp = tempfile::tempdir().unwrap();
+        let content = temp.path().join("content");
+        let paths = (0..128)
+            .map(|i| PathBuf::from(format!("content/{i:05}/index.md")))
+            .collect();
+        preprocess_paths(&content, &paths, None).unwrap();
+        assert!(!content.exists());
+    }
+
+    #[test]
     fn history_absence_retains_exact_filesystem_timestamp_fallback() {
         let temp = tempfile::tempdir().unwrap();
         let repo = git2::Repository::init(temp.path()).unwrap();
         let tree = repo.treebuilder(None).unwrap().write().unwrap();
         let tree = repo.find_tree(tree).unwrap();
         let sig = git2::Signature::now("history", "history@example.test").unwrap();
-        repo.commit(Some("HEAD"), &sig, &sig, "empty root", &tree, &[]).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "empty root", &tree, &[])
+            .unwrap();
         let content = temp.path().join("content");
         std::fs::create_dir(&content).unwrap();
+        let content = content.join("../content");
         let path = content.join("00001.md");
         std::fs::write(&path, "no committed history").unwrap();
         let expected = filesystem_modified(&path).unwrap();
-        let mut history = crate::last_modified::History::new(vec![path.clone(); 128]);
+        let mut paths = vec![path.clone(); 128];
+        paths.push(content.join("missing/index.md"));
+        let mut history = crate::last_modified::History::new(&content, paths);
         assert_eq!(last_modified(&path, &mut history).unwrap(), expected);
     }
 
@@ -3249,7 +3268,11 @@ mod phase7_timestamp_regressions {
         let temp = tempfile::tempdir().unwrap();
         let page = temp.path().join("00001.md");
         std::fs::write(&page, "+++\ntitle = \"Generated\"\n+++\nunchanged\n").unwrap();
-        std::fs::write(temp.path().join("_index.md"), "---\ntitle: Section\n---\nBody.\n").unwrap();
+        std::fs::write(
+            temp.path().join("_index.md"),
+            "---\ntitle: Section\n---\nBody.\n",
+        )
+        .unwrap();
         let before = std::fs::read(&page).unwrap();
         preprocess(temp.path(), None).unwrap();
         assert_eq!(std::fs::read(page).unwrap(), before);
