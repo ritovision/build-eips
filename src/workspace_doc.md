@@ -204,6 +204,43 @@ build-eips build --only 555 678
 
 Multiple CLI proposal numbers are space-separated; do not use commas.
 
+## Export A Standalone Corpus
+
+```bash
+build-eips corpus --output corpus.json
+build-eips corpus --output documents.json --format documents
+build-eips corpus --output chunks.json --format chunks
+build-eips corpus --output selected.json --only 20 1559 --base-url https://example.test/EIPs/
+build-eips corpus --output corpus.json --clean --force
+build-eips --remote-siblings corpus --output remote.json --clean
+```
+
+Export defaults to the full admitted proposal universe, ignoring `[render].only`.
+An explicit `--only` selects a subset and records it in `source.only`; it also
+works with `--clean` and `--remote-siblings`. Source selection otherwise matches
+build: tracked active working-tree edits by default, committed sibling content,
+and the editable local theme. `--clean` requires a clean active checkout.
+
+The default format is `documents-and-chunks`. Export uses CLI `--base-url`, then
+workspace `[site].base_url`, then the active manifest location URL, in that order.
+Document/chunk URLs are absolute; the source metadata records the effective base
+URL, source mode/identity, and selection. Normal site corpus URLs remain relative
+to the deployment root with the same source context.
+
+No prior build or Pagefind is needed, and `[search.corpus].enabled` does not govern
+this command. Each invocation prepares/renders privately under a unique temporary
+child of the selected build root and removes it on success or ordinary failure.
+It neither acquires the shared build/serve lock nor writes their `repo`, `output`,
+`serve-output` or completion receipt.
+
+The output path is relative to invocation CWD (not `-C`), and its parent must
+exist. Source files, configuration, the selected build root, symlinks and
+non-regular destinations cannot be overwritten. An existing regular export
+requires `--force`. A same-directory temporary is serialized and flushed before
+atomic publication; failure before publication preserves the previous export.
+The filesystem checks are not a sandbox against another process concurrently
+replacing parent directories under the same user account.
+
 ## Editorial Validation
 
 Use editorial commands to validate proposal files before opening or updating a pull request.

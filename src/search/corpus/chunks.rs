@@ -88,7 +88,11 @@ fn finish_chunk(chunk: Option<ChunkBuilder>, document: &DocumentRecord) -> Vec<C
     let url = chunk
         .fragment
         .as_ref()
-        .map(|fragment| format!("{}#{fragment}", document.url))
+        .map(|fragment| {
+            let encoded = url::form_urlencoded::byte_serialize(fragment.as_bytes())
+                .collect::<String>().replace('+', "%20");
+            format!("{}#{encoded}", document.url)
+        })
         .unwrap_or_else(|| document.url.clone());
     let section_id = format!("{}#{}:{}", document.id, chunk.heading_slug, chunk.ordinal);
     let parts = splitter::split_blocks(&chunk.blocks);

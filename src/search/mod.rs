@@ -20,6 +20,8 @@ use crate::{config::SearchCorpusFormat, layout::CONTENT_DIR};
 mod corpus;
 mod pagefind;
 
+pub(crate) use corpus::{export_corpus, ExportDestination};
+
 const SEARCH_ROUTE_FILE: &str = "search.md";
 pub(crate) const SEARCH_DATA_FILE: &str = "build_eips_search.toml";
 pub(crate) const SITE_CORPUS_PATH: &str = "assets/generated/search/corpus.json";
@@ -70,6 +72,21 @@ pub(crate) struct SearchCorpusRequest {
     pub(crate) output_path: PathBuf,
     pub(crate) base_url: Url,
     pub(crate) config: SearchCorpusConfig,
+    pub(crate) source: CorpusSource,
+}
+
+/// Context for both the normal site artifact and the standalone export. No
+/// local checkout paths are embedded. `only: null` means the full admitted
+/// universe; explicit selection is sorted and deduplicated.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct CorpusSource {
+    pub(crate) product: String,
+    pub(crate) base_url: String,
+    pub(crate) source_mode: String,
+    pub(crate) source_head: String,
+    pub(crate) materialized_head: String,
+    pub(crate) merged_source_tree: String,
+    pub(crate) only: Option<Vec<u32>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

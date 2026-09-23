@@ -12,7 +12,7 @@ use snafu::{OptionExt, ResultExt, Whatever};
 use url::Url;
 
 use crate::{
-    config::{RepositoryUse, ServerBinding},
+    config::{RepositoryUse, SearchCorpusFormat, ServerBinding},
     execution::{ConfigurationSnapshot, ResolvedExecution},
     git,
     layout::{mounted_theme_path, output_path, serve_output_path, CONTENT_DIR, REPO_DIR},
@@ -164,6 +164,7 @@ fn run_search_corpus(
     output_path: &Path,
     base_url: &Url,
     search_config: &SearchConfig,
+    source: search::CorpusSource,
 ) -> Result<Option<SearchCorpusSummary>, Whatever> {
     if !matches!(mode, SearchIndexMode::Build) {
         return Ok(None);
@@ -173,6 +174,7 @@ fn run_search_corpus(
         output_path: output_path.to_path_buf(),
         base_url: base_url.clone(),
         config: search_config.corpus.clone(),
+        source,
     })
     .whatever_context("search corpus output failed")
 }
@@ -267,6 +269,7 @@ impl Prepared {
             &candidate_output,
             &base_url,
             &self.search,
+            self.corpus_source(&base_url)?,
         )?;
         self.configuration.verify()?;
         let info = crate::build_artifact::BuildInfo::new(
@@ -278,6 +281,53 @@ impl Prepared {
         info.write(&candidate_output)?;
         crate::build_artifact::publish(&candidate_output, &self.output_path)?;
         Ok(())
+    }
+
+    /// Only called with an independently owned disposable preparation root.
+    /// Unlike `build`, this never indexes Pagefind, writes a site corpus or a
+    /// completed-build receipt, or promotes reusable output.
+    pub(crate) fn corpus(
+        self,
+        destination: &search::ExportDestination,
+        format: SearchCorpusFormat,
+    ) -> Result<(), Whatever> {
+        let base_url = self.resolved_base_url();
+        let source = self.corpus_source(base_url)?;
+        search::write_search_route(
+            &self.repo_path,
+            SearchTemplateState::from_base_url(false, base_url),
+        ).whatever_context("unable to write private export search state")?;
+        crate::reserved::validate_zola_facing(&self.repo_path)?;
+        zola::build(&self.theme_path, &self.repo_path, &self.output_path, base_url.as_str())
+            .whatever_context("private corpus render failed")?;
+        crate::reserved::validate_rendered(&self.output_path)?;
+        self.configuration.verify()?;
+        let summary = search::export_corpus(
+            &self.output_path, base_url, source, format, destination,
+        )?;
+        log::info!("corpus exported: {} documents, {} chunks to `{}`",
+            summary.documents, summary.chunks, summary.output_path.display());
+        Ok(())
+    }
+
+    fn corpus_source(&self, base_url: &Url) -> Result<search::CorpusSource, Whatever> {
+        let repo = git::open_generated_repository(&self.repo_path)
+            .whatever_context("unable to identify corpus source")?;
+        let tree = repo.head().and_then(|h| h.peel_to_tree())
+            .whatever_context("unable to identify merged corpus source tree")?.id();
+        Ok(search::CorpusSource {
+            product: self.repository_use.title.clone(),
+            base_url: base_url.to_string(),
+            source_mode: match self.source_materialization {
+                git::SourceMaterialization::Dirty => "dirty",
+                git::SourceMaterialization::Clean => "clean",
+            }.to_owned(),
+            source_head: self.source_generation.source_head.to_string(),
+            materialized_head: self.source_generation.materialized_head.to_string(),
+            merged_source_tree: tree.to_string(),
+            only: self.only_plan.as_ref().map(|plan|
+                plan.selected_numbers().into_iter().map(|n| n.get()).collect()),
+        })
     }
 
     pub(crate) fn serve(self) -> Result<(), Whatever> {

@@ -159,7 +159,7 @@ indexing no longer deletes output merely because it resembles an older index.
 Normal `build --search-corpus` output is always
 `assets/generated/search/corpus.json`; `[search.corpus]` has only `enabled` and
 `format`. The removed `output` key is rejected with an actionable error, not
-migrated. Standalone `corpus --output` is separately planned, not implemented here.
+migrated. Standalone export uses `corpus --output` independently of these settings.
 Ordinary authored files outside the reserved paths, including a file named
 `search-corpus.json`, are not deleted as presumed legacy data.
 
@@ -176,3 +176,28 @@ or drive prefixes. Invalid aliases/paths are rejected before Zola can escape a
 private candidate and touch a completed build. After rejection, only empty
 reserved directories in disposable raw staging are pruned, allowing recovery;
 authored files and rendered output are never removed by this recovery step.
+
+## Standalone corpus export
+
+```bash
+build-eips corpus --output corpus.json
+build-eips corpus --output corpus.json --format documents --force
+build-eips corpus --output selected.json --only 20 1559 --base-url https://example.test/EIPs/
+build-eips --remote-siblings corpus --output clean.json --clean
+```
+
+The default export covers the full admitted EIP/ERC universe and ignores workspace
+`[render].only`; only an explicit `corpus --only` requests a subset. Format defaults
+to `documents-and-chunks`. The private preparation/render never invokes Pagefind,
+publishes a normal site corpus, or changes reusable `build`/`preview` or live
+`serve` output. No previous build is needed. Source selection and base-URL
+precedence match `build`; explicit export subsets also work with clean or remote
+sibling source selection.
+
+`--output` is relative to the invocation directory, not `-C`. Its parent must
+already exist. Symlink/non-regular destinations and source/build overlaps are
+refused, even with `--force`. Existing regular files require `--force` and are
+replaced only after rendering, extraction and same-directory serialization succeed.
+Both corpus forms have one first-production schema with source/base/selection
+context; standalone document/chunk URLs are absolute. See
+[the export contract](docs/corpus-export.md) for the complete behavior and limits.

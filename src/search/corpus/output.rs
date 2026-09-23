@@ -30,7 +30,7 @@ pub(super) fn write_corpus_file(output_path: &Path, corpus: &CorpusOutput) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
-    fn empty() -> CorpusOutput { CorpusOutput { version: 1, documents: Vec::new(), chunks: Vec::new() } }
+    fn empty() -> CorpusOutput { CorpusOutput { version: 1, source: super::super::tests::fixture_source(), documents: Vec::new(), chunks: Vec::new() } }
     #[test]
     fn site_corpus_never_overwrites_authored_files_or_directories() {
         for directory in [false, true] {

@@ -115,6 +115,7 @@ fn cli_only_requested(args: &Args) -> bool {
 }
 
 fn only_cli_is_applicable(args: &Args) -> bool {
+    if matches!(args.operation, Operation::Corpus { .. }) { return true; }
     matches!(
         args.operation,
         Operation::Build { .. } | Operation::Serve { .. }
@@ -136,7 +137,7 @@ pub(crate) fn resolve_execution_settings(
     let clean = args.operation.clean_cli_args().clean;
 
     if cli_only_requested(args) && !only_cli_is_applicable(args) {
-        snafu::whatever!("--only is supported only for local dirty build and serve commands");
+        snafu::whatever!("--only is supported for corpus exports or local dirty build and serve commands");
     }
 
     let (allow_dirty, default_sibling) =
@@ -185,6 +186,11 @@ fn resolve_only_selection(
     settings: &ExecutionSettings,
     workspace_config: Option<&LoadedWorkspaceConfig>,
 ) -> Result<Option<BTreeSet<ProposalNumber>>, Whatever> {
+    // Exports never inherit a developer's workspace render subset. Explicit
+    // export selection is also supported with clean/remote-sibling sources.
+    if let Operation::Corpus { only, .. } = &args.operation {
+        return Ok(dedupe_only_numbers(&only.only));
+    }
     let applicable = matches!(
         args.operation,
         Operation::Build { .. } | Operation::Serve { .. }
@@ -195,7 +201,7 @@ fn resolve_only_selection(
         if let Some(numbers) = dedupe_only_numbers(&only.only) {
             if !applicable {
                 snafu::whatever!(
-                    "--only is supported only for local dirty build and serve commands"
+                    "--only is supported for corpus exports or local dirty build and serve commands"
                 );
             }
             return Ok(Some(numbers));
@@ -286,6 +292,7 @@ fn operation_requires_theme(operation: &Operation) -> bool {
     matches!(
         operation,
         Operation::Build { .. }
+            | Operation::Corpus { .. }
             | Operation::Serve { .. }
             | Operation::Check { .. }
             | Operation::Editorial { .. }
@@ -363,6 +370,9 @@ fn resolve_search_config(
     args: &Args,
     workspace_config: Option<&LoadedWorkspaceConfig>,
 ) -> Result<SearchConfig, Whatever> {
+    if matches!(args.operation, Operation::Corpus { .. }) {
+        return Ok(SearchConfig { pagefind: false, corpus: SearchCorpusConfig::default() });
+    }
     let search_settings = workspace_config.map(|config| config.search_settings());
     let mut search = search_settings
         .map(|settings| SearchConfig {
@@ -534,6 +544,41 @@ mod tests {
         resolve_only_selection(&args, &settings, workspace_config)
             .unwrap()
             .map(|numbers| numbers.into_iter().map(|number| number.get()).collect())
+    }
+
+    #[test]
+    fn corpus_is_full_by_default_and_explicit_selection_survives_source_modes() {
+        let config = load_workspace_config("[render]\nonly=[678]\n[search]\npagefind=true\n[search.corpus]\nenabled=true\nformat='chunks'\n");
+        for prefix in [vec!["build-eips"], vec!["build-eips", "--remote-siblings"]] {
+            for clean in [false, true] {
+                let mut args = prefix.clone();
+                args.extend(["corpus", "--output", "export.json"]);
+                if clean { args.push("--clean"); }
+                assert!(only_selection_for(&args, Some(&config)).is_none());
+                let parsed = parse_args(&args);
+                let settings = resolve_execution_settings(&parsed, &[], Some(&config)).unwrap();
+                assert_eq!(settings.allow_dirty, !clean);
+                assert_eq!(settings.sibling, if parsed.remote_siblings { SelectedSource::Remote } else { SelectedSource::WorkspaceLocal });
+                let search = resolve_search_config(&parsed, Some(&config)).unwrap();
+                assert!(!search.pagefind && !search.corpus.enabled);
+                args.extend(["--only", "1559", "20", "1559"]);
+                assert_eq!(only_selection_for(&args, Some(&config)), Some(vec![20, 1559]));
+            }
+        }
+        // Build retains its established eligibility and workspace subset rules.
+        assert_eq!(only_selection_for(&["build-eips", "build"], Some(&config)), Some(vec![678]));
+        let build = parse_args(&["build-eips", "build", "--clean", "--only", "20"]);
+        assert!(resolve_execution_settings(&build, &[], Some(&config)).is_err());
+    }
+
+    #[test]
+    fn corpus_uses_build_base_url_precedence() {
+        let config = load_workspace_config("[site]\nbase_url='https://workspace.test/area/'\n");
+        let plain = parse_args(&["build-eips", "corpus", "--output", "export.json"]);
+        assert!(super::resolve_base_url_override(&plain, None).unwrap().is_none());
+        assert_eq!(super::resolve_base_url_override(&plain, Some(&config)).unwrap().unwrap().as_str(), "https://workspace.test/area/");
+        let explicit = parse_args(&["build-eips", "corpus", "--output", "export.json", "--base-url", "https://cli.test/override/"]);
+        assert_eq!(super::resolve_base_url_override(&explicit, Some(&config)).unwrap().unwrap().as_str(), "https://cli.test/override/");
     }
 
     #[test]

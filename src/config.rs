@@ -65,7 +65,7 @@ pub enum Error {
 
 #[derive(Debug, Snafu)]
 pub enum WorkspaceError {
-    #[snafu(display("workspace config `{}` uses removed [search.corpus].output; remove that key: normal site corpus is fixed at assets/generated/search/corpus.json. Standalone `build-eips corpus --output` is separate planned export work", config_path.display()))]
+    #[snafu(display("workspace config `{}` uses removed [search.corpus].output; remove that key: normal site corpus is fixed at assets/generated/search/corpus.json. Use `build-eips corpus --output <path>` for a standalone export", config_path.display()))]
     RemovedCorpusOutput { config_path: PathBuf },
     #[snafu(display("i/o error while accessing `{}`", path.to_string_lossy()))]
     Fs {

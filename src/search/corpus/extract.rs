@@ -16,7 +16,7 @@ use snafu::{ResultExt, Whatever};
 
 use super::{
     chunks::{collect_text, element_has_pagefind_ignore, extract_chunks},
-    schema::{CorpusOutput, DocumentRecord, PagefindData, CORPUS_VERSION},
+    schema::{ExtractedCorpus, DocumentRecord, PagefindData},
 };
 
 const PAGEFIND_DIR: &str = "pagefind";
@@ -56,7 +56,7 @@ fn selectors() -> Result<Selectors, Whatever> {
 pub(super) fn extract_corpus(
     output_path: &Path,
     base_path: &str,
-) -> Result<CorpusOutput, Whatever> {
+) -> Result<ExtractedCorpus, Whatever> {
     let selectors = selectors()?;
     let mut documents = Vec::new();
     let mut chunks = Vec::new();
@@ -70,8 +70,7 @@ pub(super) fn extract_corpus(
         documents.push(extracted.document);
     }
 
-    Ok(CorpusOutput {
-        version: CORPUS_VERSION,
+    Ok(ExtractedCorpus {
         documents,
         chunks,
     })
@@ -260,15 +259,16 @@ fn rendered_url(output_path: &Path, html_path: &Path, base_path: &str) -> Result
         })
         .collect::<Vec<_>>();
 
-    if components.last().is_some_and(|name| name == "index.html") {
-        components.pop();
-        let suffix = components.join("/");
-        return Ok(if suffix.is_empty() {
-            base_path.to_owned()
-        } else {
-            format!("{base_path}{suffix}/")
-        });
+    let directory_url = components.last().is_some_and(|name| name == "index.html");
+    if directory_url { components.pop(); }
+    // These are filesystem names, not pre-encoded URL segments. Encode %, #,
+    // ?, Unicode and spaces exactly once before resolving the export origin.
+    let mut encoded = url::Url::parse("https://corpus.invalid/").expect("literal URL");
+    {
+        let mut segments = encoded.path_segments_mut().expect("hierarchical URL");
+        segments.clear();
+        for component in &components { segments.push(component); }
+        if directory_url && !components.is_empty() { segments.push(""); }
     }
-
-    Ok(format!("{base_path}{}", components.join("/")))
+    Ok(format!("{base_path}{}", encoded.path().trim_start_matches('/')))
 }

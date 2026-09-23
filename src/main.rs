@@ -9,6 +9,7 @@ mod changed;
 mod cli;
 mod config;
 mod context;
+mod corpus_export;
 mod editorial;
 mod execution;
 mod find_root;
@@ -116,6 +117,11 @@ fn run() -> Result<(), Whatever> {
         .expect("non-execution commands should have returned earlier");
     let resolved = resolve_execution(&args)?;
 
+    if let RuntimeOperation::Corpus { output, format, force } = &runtime_operation {
+        corpus_export::run(resolved, output, *format, *force)?;
+        return Ok(());
+    }
+
     if matches!(runtime_operation, RuntimeOperation::Preview) {
         preview::serve(&output_path(&resolved.build_path), &resolved.server_binding)
             .whatever_context("preview server failed")?;
@@ -147,7 +153,7 @@ fn run() -> Result<(), Whatever> {
         RuntimeOperation::Serve => {
             Prepared::prepare(resolved)?.serve()?;
         }
-        RuntimeOperation::Preview => unreachable!(),
+        RuntimeOperation::Preview | RuntimeOperation::Corpus { .. } => unreachable!(),
         RuntimeOperation::Changed { all, format } => {
             changed::run(&resolved, &build_path, all, &format)?;
         }

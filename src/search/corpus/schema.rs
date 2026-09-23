@@ -15,6 +15,7 @@ pub(super) const CORPUS_VERSION: u8 = 1;
 #[derive(Debug, Serialize)]
 pub(super) struct CorpusOutput {
     pub(super) version: u8,
+    pub(super) source: crate::search::CorpusSource,
     pub(super) documents: Vec<DocumentRecord>,
     pub(super) chunks: Vec<ChunkRecord>,
 }
@@ -58,4 +59,11 @@ pub(super) struct PagefindData {
     pub(super) filters: BTreeMap<String, Vec<String>>,
     pub(super) meta: BTreeMap<String, String>,
     pub(super) sort: BTreeMap<String, String>,
+}
+
+/// The shared extractor has no source-selection or publication policy.
+#[derive(Debug)]
+pub(super) struct ExtractedCorpus {
+    pub(super) documents: Vec<DocumentRecord>,
+    pub(super) chunks: Vec<ChunkRecord>,
 }
