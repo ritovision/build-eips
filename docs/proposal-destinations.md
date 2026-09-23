@@ -21,7 +21,13 @@ path to `get_url`. Ordinary Markdown links to selected sources keep Zola source 
 Zola treats queries on `@/file.md?query` as part of the source filename. For query-
 bearing links, the preprocessor validates the source/asset and emits a relative
 owned proposal/asset rendered route instead; the browser applies the deployment
-prefix once. Query and fragment bytes are then appended unchanged.
+prefix once. Query and fragment bytes are then appended unchanged. Encoded asset
+source names use the same validated route path, classified after decoding once.
+For TOML Markdown assets, use the admitted explicit `path`, not the filename-derived
+route. A query-bearing or encoded link to an implicit TOML route is refused with an
+actionable diagnostic instead of guessing renderer/config-dependent slug behavior.
+Ordinary unencoded, query-free source links still use Zola's resolver, including
+implicit TOML routing. This bounded refusal is not a live semantic lifecycle change.
 
 Official page fallback is `https://eips.ethereum.org/EIPS/eip-N` or
 `https://ercs.ethereum.org/ERCS/erc-N`. Official assets live under `/assets/eip-N/`

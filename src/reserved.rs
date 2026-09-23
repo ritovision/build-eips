@@ -151,6 +151,16 @@ fn route_overrides(contents: &str, path: &Path) -> Result<RouteOverrides, Whatev
     }
 }
 
+/// Read one admitted explicit route without duplicating the front-matter parser.
+/// This is not an implicit Zola route/slug inference API.
+pub(crate) fn explicit_content_path(contents: &str, source: &Path) -> Result<Option<String>, Whatever> {
+    let path = route_overrides(contents, source)?.path;
+    if let Some(value) = &path {
+        check_route(value, source)?;
+    }
+    Ok(path)
+}
+
 fn generated_content_route(relative: &Path) -> bool {
     matches!(relative.to_str(), Some("search.md" | "hardforks/_index.md"))
 }

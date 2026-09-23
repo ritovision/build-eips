@@ -428,11 +428,7 @@ pub(crate) fn resolve_proposal_asset_path(
         return Ok(ProposalAssetPathResolution::NotAProposalAsset);
     };
 
-    let kind = if iri_path.ends_with(".md") {
-        ProposalAssetKind::Markdown
-    } else {
-        ProposalAssetKind::Static
-    };
+    let kind = ProposalAssetKind::from_path(&asset_relative_path);
     let rendered_target_path =
         rendered_asset_path(target_proposal_number, &asset_relative_path, kind)?;
 
@@ -1066,7 +1062,7 @@ fn resolve_asset_link_rewrite(
     source_md_path: &Path,
     only_plan: Option<&OnlyRenderPlan>,
     iri_path: &str,
-    query_present: bool,
+    rendered_destination_needed: bool,
 ) -> Result<Option<AssetLinkRewrite>, Whatever> {
     if iri_path.is_empty() {
         return Ok(None);
@@ -1087,7 +1083,7 @@ fn resolve_asset_link_rewrite(
 
         if plan.has_proposal_asset(&asset_path.content_relative_asset_path) {
             validate_local_proposal_asset(root, source_md_path, iri_path, &asset_path)?;
-            return local_asset_link_rewrite(root, source_md_path, asset_path, query_present).map(Some);
+            return local_asset_link_rewrite(root, source_md_path, asset_path, rendered_destination_needed).map(Some);
         }
 
         snafu::whatever!(
@@ -1098,7 +1094,7 @@ fn resolve_asset_link_rewrite(
     }
 
     validate_local_proposal_asset(root, source_md_path, iri_path, &asset_path)?;
-    local_asset_link_rewrite(root, source_md_path, asset_path, query_present).map(Some)
+    local_asset_link_rewrite(root, source_md_path, asset_path, rendered_destination_needed).map(Some)
 }
 
 fn validate_local_proposal_asset(
@@ -1118,16 +1114,44 @@ fn validate_local_proposal_asset(
     );
 }
 
+fn effective_markdown_asset_route(
+    root: &Path,
+    asset: &ProposalAssetPath,
+) -> Result<String, Whatever> {
+    let path = root.join(&asset.content_relative_asset_path);
+    let contents = read_to_string(&path)
+        .with_whatever_context(|_| format!("unable to inspect Markdown asset `{}`", path.display()))?;
+    if !is_generated_zola_markdown(&contents) {
+        // Plain Markdown receives the owned numeric asset route during preprocessing.
+        return Ok(asset.rendered_target_path.clone());
+    }
+    let explicit = crate::reserved::explicit_content_path(&contents, &path)?
+        .with_whatever_context(|| format!(
+            "query-bearing or encoded link to TOML Markdown asset `{}` requires an explicit `path`; refusing to guess Zola's implicit route",
+            path.display()
+        ))?;
+    // Zola 0.22.1 retains an explicit path (trimmed, rooted, trailing slash).
+    // Its output components are literal path names, not pre-encoded URL segments.
+    let segments = explicit.trim().split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .map(percent_encode_url_segment)
+        .collect::<Vec<_>>();
+    if segments.is_empty() {
+        Ok("/".to_owned())
+    } else {
+        Ok(format!("/{}/", segments.join("/")))
+    }
+}
+
 fn local_asset_link_rewrite(
     root: &Path,
     source_md_path: &Path,
     asset_path: ProposalAssetPath,
-    query_present: bool,
+    rendered_destination_needed: bool,
 ) -> Result<AssetLinkRewrite, Whatever> {
-    // Zola's @/ resolver treats a query as part of the source filename. Keep
-    // ordinary Markdown links in that resolver, but use the already validated
-    // rendered destination when a query needs preserving.
-    if asset_path.kind == ProposalAssetKind::Markdown && !query_present {
+    // Keep ordinary Markdown links in Zola's source resolver. Queries and
+    // encoded source names instead need a validated, effective rendered route.
+    if asset_path.kind == ProposalAssetKind::Markdown && !rendered_destination_needed {
         return Ok(AssetLinkRewrite::FallThrough);
     }
 
@@ -1141,8 +1165,13 @@ fn local_asset_link_rewrite(
             )
         })?;
     let source_rendered_path = absolute_rendered_path_for_content_path(source_relative_path)?;
+    let target_rendered_path = if asset_path.kind == ProposalAssetKind::Markdown {
+        effective_markdown_asset_route(root, &asset_path)?
+    } else {
+        asset_path.rendered_target_path
+    };
     let relative_url =
-        relative_url_from_rendered_paths(&source_rendered_path, &asset_path.rendered_target_path)?;
+        relative_url_from_rendered_paths(&source_rendered_path, &target_rendered_path)?;
 
     Ok(AssetLinkRewrite::Rewrite(relative_url))
 }
@@ -1177,7 +1206,7 @@ fn fix_links<'a, 'b>(
             }
 
             let iri_path: &str = iri_ref.path().as_ref();
-            match resolve_asset_link_rewrite(root, source_md_path, only_plan, iri_path, iri_ref.query().is_some())? {
+            match resolve_asset_link_rewrite(root, source_md_path, only_plan, iri_path, iri_ref.query().is_some() || iri_path.contains('%'))? {
                 Some(AssetLinkRewrite::Rewrite(url)) => {
                     *dest_url = CowStr::from(append_query_and_fragment(url, &iri_ref));
                     return Ok(e);
@@ -2173,11 +2202,42 @@ mod tests {
     }
 
     #[test]
+    fn queried_markdown_assets_honor_explicit_toml_routes() {
+        for (path, expected) in [
+            ("678/assets/custom-guide", "../678/assets/custom-guide/"),
+            (" /reference/custom guide %/ ", "../reference/custom%20guide%20%25/"),
+            ("", "../"),
+        ] {
+            let (_temp, content) = content_repo(&[
+                ("00555.md", proposal_markdown(555, None, "", "[custom](./00678/assets/guide.md?download=1#abstract)")),
+                ("00678/index.md", proposal_markdown(678, None, "", "Target.")),
+                ("00678/assets/guide.md", format!("+++\npath = {path:?}\n+++\n# Abstract\n")),
+            ]);
+            let plan = only_plan(&content, &[555, 678]);
+            preprocess(&content, Some(&plan)).unwrap();
+            let body = rendered_body(&content.join("00555.md"));
+            assert!(body.contains(&format!("[custom]({expected}?download=1#abstract)")), "{body}");
+        }
+    }
+
+    #[test]
+    fn queried_toml_assets_refuse_unknown_or_unconfined_routes() {
+        for header in ["slug = 'custom'", "path = '../../outside'", "path = '/search/hijack'"] {
+            let (_temp, content) = content_repo(&[
+                ("00555.md", proposal_markdown(555, None, "", "[custom](./00678/assets/guide.md?q=1#abstract)")),
+                ("00678/index.md", proposal_markdown(678, None, "", "Target.")),
+                ("00678/assets/guide.md", format!("+++\n{header}\n+++\n# Abstract\n")),
+            ]);
+            assert!(preprocess(&content, None).is_err(), "{header}");
+        }
+    }
+
+    #[test]
     fn selected_markdown_queries_use_validated_rendered_routes() {
         for targeted in [false, true] {
             let (_temp, content) = content_repo(&[
                 ("00555.md", proposal_markdown(555, None, "",
-                    "[page](./00678/index.md?q=a%26b#abstract)\n[asset](./00678/assets/guide%20name.md?q=a%26b#abstract)\n[normal](./00678/index.md#abstract)")),
+                    "[page](./00678/index.md?q=a%26b#abstract)\n[asset](./00678/assets/guide%20name.md?q=a%26b#abstract)\n[normal](./00678/index.md#abstract)\n[encoded](./00678/assets/guide%20name%2Emd#abstract)")),
                 ("00678/index.md", proposal_markdown(678, None, "", "## Abstract\n\nTarget.")),
                 ("00678/assets/guide name.md", "# Abstract\n\nGuide.".to_owned()),
             ]);
@@ -2187,6 +2247,7 @@ mod tests {
             assert!(body.contains("[page](../678/?q=a%26b#abstract)"), "{body}");
             assert!(body.contains("[asset](../678/assets/guide%20name/?q=a%26b#abstract)"), "{body}");
             assert!(body.contains("[normal](@/00678/index.md#abstract)"), "{body}");
+            assert!(body.contains("[encoded](../678/assets/guide%20name/#abstract)"), "{body}");
         }
         let (_temp, content) = content_repo(&[
             ("00555.md", proposal_markdown(555, None, "", "[missing](./00678.md?q=1#abstract)")),
