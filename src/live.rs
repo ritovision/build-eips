@@ -445,6 +445,9 @@ impl LiveSource {
         crate::source_reads::validate_tree(&self.stage).whatever_context(
             "transformed source-read policy rejected; last-good input retained",
         )?;
+        crate::reserved::validate_zola_facing(&self.stage).whatever_context(
+            "transformed routes rejected; last-good input retained",
+        )?;
         // This boundary is intentionally after all parsing and transformation.
         // Publication I/O can still fail midway; keep pending paths for retry.
         self.publication_uncertain = true;

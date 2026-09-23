@@ -249,6 +249,8 @@ impl Prepared {
     pub(crate) fn build(self) -> Result<(), Whatever> {
         let base_url = self.resolved_base_url().clone();
         let _ = self.write_search_route_for_zola(SearchRouteMode::Build)?;
+        crate::reserved::validate_zola_facing(&self.repo_path)
+            .whatever_context("prepared Zola input contains unsafe or reserved routes")?;
         let build_root = self.output_path.parent().whatever_context("output has no build root")?;
         let (_candidate, candidate_output) = crate::build_artifact::candidate_output(build_root)?;
         zola::build(
@@ -275,6 +277,8 @@ impl Prepared {
 
     pub(crate) fn serve(self) -> Result<(), Whatever> {
         let _ = self.write_search_route_for_zola(SearchRouteMode::Serve)?;
+        crate::reserved::validate_zola_facing(&self.repo_path)
+            .whatever_context("prepared Zola input contains unsafe or reserved routes")?;
         let mut sync_config = serve_sync_config(
             self.source_materialization,
             &self.source_root,
@@ -315,6 +319,8 @@ impl Prepared {
 
     pub(crate) fn check(self) -> Result<(), Whatever> {
         let _ = self.write_search_route_for_zola(SearchRouteMode::Check)?;
+        crate::reserved::validate_zola_facing(&self.repo_path)
+            .whatever_context("prepared Zola input contains unsafe or reserved routes")?;
         zola::check(&self.theme_path, &self.repo_path).whatever_context("zola check failed")?;
         Ok(())
     }
