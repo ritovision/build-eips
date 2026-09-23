@@ -28,7 +28,8 @@ Source semantics reuse normal build resolution: the active local checkout's
 tracked working-tree content is used by default; `--clean` requires that active
 checkout to be clean and materializes its commit. Siblings use their committed
 snapshots (local workspace repositories by default, declared manifest repositories
-with `--remote-siblings`). The local theme remains editable in either source mode.
+with `--remote-siblings`, including bare `file://` Git remotes). The local theme
+remains editable in either source mode.
 Untracked active files and dirty sibling edits are not automatically admitted.
 Unlike the developer build subset control, explicit export selection works in
 clean and remote-sibling modes too.

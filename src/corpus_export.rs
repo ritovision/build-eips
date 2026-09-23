@@ -85,8 +85,15 @@ fn validate_destination(resolved: &ResolvedExecution, destination: &Path) -> Res
 fn protect_git_metadata(source: &Path, destination: &Path) -> Result<(), Whatever> {
     // A linked worktree's administrative and common object/ref directories can
     // be outside the checkout. Protect those actual paths, not only `.git`.
-    let repo = crate::git::open_usable_repository(source)
-        .whatever_context("unable to identify protected source Git metadata")?;
+    // Declared file:// remotes can be bare even though active/workspace
+    // checkouts cannot. This guard identifies metadata; it must not impose the
+    // local-worktree usability policy on the existing remote-fetch contract.
+    let repo = git2::Repository::open_ext(
+        source,
+        git2::RepositoryOpenFlags::NO_SEARCH,
+        &[] as &[&std::ffi::OsStr],
+    )
+    .whatever_context("unable to identify protected source Git metadata")?;
     for metadata in [repo.path(), repo.commondir()] {
         generated_fs::check_disjoint(destination, metadata)
             .whatever_context("corpus destination overlaps source Git metadata")?;
@@ -97,6 +104,22 @@ fn protect_git_metadata(source: &Path, destination: &Path) -> Result<(), Whateve
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn bare_file_remote_metadata_is_protected_without_requiring_a_worktree() {
+        let temp = tempfile::tempdir().unwrap();
+        let remote = temp.path().join("remote.git");
+        let repo = git2::Repository::init_bare(&remote).unwrap();
+        let tree = repo
+            .find_tree(repo.treebuilder(None).unwrap().write().unwrap())
+            .unwrap();
+        let author = git2::Signature::now("Test", "test@example.test").unwrap();
+        repo.commit(Some("HEAD"), &author, &author, "initial", &tree, &[])
+            .unwrap();
+        assert!(repo.is_bare());
+        assert!(protect_git_metadata(&remote, &temp.path().join("export.json")).is_ok());
+        assert!(protect_git_metadata(&remote, &remote.join("HEAD")).is_err());
+    }
+
     #[test]
     fn linked_worktree_actual_git_metadata_is_protected() {
         let temp = tempfile::tempdir().unwrap();
