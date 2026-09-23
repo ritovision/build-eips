@@ -1,0 +1,154 @@
+/*
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/.
+ */
+
+//! Diffed publication into a disposable live tree. Regular files and link leaves
+//! are replaced by rename, never truncated or unlinked first. A directory/file
+//! transition and a batch of files are NOT an atomic website transaction.
+
+use std::{collections::BTreeSet, fs, io, path::{Path, PathBuf}};
+
+pub(crate) fn changed_paths(
+    source: &Path,
+    destination: &Path,
+    paths: &BTreeSet<PathBuf>,
+) -> io::Result<BTreeSet<PathBuf>> {
+    let mut changed = BTreeSet::new();
+    for path in paths {
+        if !same_file(source, destination, path)? {
+            changed.insert(path.clone());
+        }
+    }
+    Ok(changed)
+}
+
+fn same_file(source: &Path, destination: &Path, path: &Path) -> io::Result<bool> {
+    let source_meta = crate::tree_sync::inspect(source, path)?;
+    let destination_meta = crate::tree_sync::inspect(destination, path)?;
+    let (Some(left), Some(right)) = (source_meta.as_ref(), destination_meta.as_ref()) else {
+        return Ok(source_meta.is_none() && destination_meta.is_none());
+    };
+    if crate::generated_fs::is_link(left) || crate::generated_fs::is_link(right) {
+        return Ok(crate::generated_fs::is_link(left)
+            && crate::generated_fs::is_link(right)
+            && fs::read_link(source.join(path))? == fs::read_link(destination.join(path))?);
+    }
+    if left.is_dir() || right.is_dir() {
+        return Ok(left.is_dir() && right.is_dir());
+    }
+    if !left.is_file() || !right.is_file() {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "unsupported publication file type"));
+    }
+    Ok(left.len() == right.len()
+        && left.permissions() == right.permissions()
+        && fs::read(source.join(path))? == fs::read(destination.join(path))?)
+}
+
+pub(crate) fn publish(
+    source: &Path,
+    destination: &Path,
+    paths: &BTreeSet<PathBuf>,
+) -> io::Result<usize> {
+    let changed = changed_paths(source, destination, paths)?;
+    if changed.is_empty() {
+        return Ok(0);
+    }
+    let plan = crate::tree_sync::Plan::new(source, destination, &changed)?;
+    // Keep temporary files outside the watched tree: Zola must not copy a
+    // temporary static file or try to render partially written Markdown.
+    let parent = source.parent().ok_or_else(|| io::Error::other("private staging has no parent"))?;
+    let scratch = tempfile::Builder::new().prefix(".serve-publication-").tempdir_in(parent)?;
+    plan.prepare_atomic_destination(destination)?;
+    for path in &plan.files {
+        let source_path = source.join(path);
+        let destination_path = destination.join(path);
+        crate::generated_fs::check_path(source, &source_path, true)?;
+        crate::generated_fs::check_path(destination, &destination_path, true)?;
+        let metadata = fs::symlink_metadata(&source_path)?;
+        let temporary = tempfile::NamedTempFile::new_in(scratch.path())?;
+        if crate::generated_fs::is_link(&metadata) {
+            let temporary = temporary.into_temp_path();
+            fs::remove_file(&temporary)?;
+            crate::git::copy_symlink(&source_path, &temporary)?;
+            temporary.persist(&destination_path).map_err(|e| e.error)?;
+        } else {
+            fs::copy(&source_path, temporary.path())?;
+            temporary.as_file().set_permissions(metadata.permissions())?;
+            temporary.persist(&destination_path).map_err(|e| e.error)?;
+        }
+        log::debug!("published live file `{}`", path.display());
+    }
+    Ok(changed.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write(root: &Path, name: &str, value: &str) {
+        let path = root.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, value).unwrap();
+    }
+
+    #[test]
+    fn unchanged_files_keep_their_identity_and_replacements_preserve_old_hardlinks() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("live");
+        write(&source, "content/page.md", "same");
+        write(&destination, "content/page.md", "same");
+        let path = destination.join("content/page.md");
+        fs::hard_link(&path, temp.path().join("old-link")).unwrap();
+        let modified = fs::metadata(&path).unwrap().modified().unwrap();
+        let paths = BTreeSet::from([PathBuf::from("content/page.md")]);
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
+        assert_eq!(fs::metadata(&path).unwrap().modified().unwrap(), modified);
+        write(&source, "content/page.md", "new");
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 1);
+        assert_eq!(fs::read_to_string(path).unwrap(), "new");
+        assert_eq!(fs::read_to_string(temp.path().join("old-link")).unwrap(), "same");
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
+    }
+
+    #[test]
+    fn file_directory_transitions_and_deletions_converge() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("live");
+        write(&source, "static/item/child", "child");
+        write(&destination, "static/item", "old");
+        let paths = BTreeSet::from([PathBuf::from("static/item"), PathBuf::from("static/item/child")]);
+        publish(&source, &destination, &paths).unwrap();
+        assert_eq!(fs::read_to_string(destination.join("static/item/child")).unwrap(), "child");
+        fs::remove_dir_all(source.join("static/item")).unwrap();
+        write(&source, "static/item", "leaf");
+        publish(&source, &destination, &paths).unwrap();
+        assert_eq!(fs::read_to_string(destination.join("static/item")).unwrap(), "leaf");
+        fs::remove_file(source.join("static/item")).unwrap();
+        publish(&source, &destination, &paths).unwrap();
+        assert!(!destination.join("static/item").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn link_leaves_are_replaced_without_following_them() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("live");
+        fs::create_dir(&source).unwrap(); fs::create_dir(&destination).unwrap();
+        fs::write(temp.path().join("outside"), "keep").unwrap();
+        std::os::unix::fs::symlink(temp.path().join("outside"), destination.join("leaf")).unwrap();
+        write(&source, "leaf", "replace");
+        let paths = BTreeSet::from([PathBuf::from("leaf")]);
+        publish(&source, &destination, &paths).unwrap();
+        assert_eq!(fs::read_to_string(temp.path().join("outside")).unwrap(), "keep");
+        fs::remove_file(source.join("leaf")).unwrap();
+        std::os::unix::fs::symlink("target", source.join("leaf")).unwrap();
+        publish(&source, &destination, &paths).unwrap();
+        assert_eq!(fs::read_link(destination.join("leaf")).unwrap(), Path::new("target"));
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
+    }
+}

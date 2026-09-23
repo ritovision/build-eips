@@ -29,6 +29,7 @@ mod progress;
 mod proposal;
 mod proposal_catalog;
 mod proposal_metadata;
+mod publication;
 mod reserved;
 mod search;
 mod serve;

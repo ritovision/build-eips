@@ -136,7 +136,22 @@ impl Plan {
     }
 
     pub(crate) fn prepare_destination(&self, destination: &Path) -> io::Result<()> {
+        self.prepare_destination_inner(destination, false)
+    }
+
+    pub(crate) fn prepare_atomic_destination(&self, destination: &Path) -> io::Result<()> {
+        self.prepare_destination_inner(destination, true)
+    }
+
+    fn prepare_destination_inner(&self, destination: &Path, atomic_leaves: bool) -> io::Result<()> {
         for path in &self.removals {
+            // Atomic publishers replace a leaf by rename. Only deletion and
+            // incompatible directory shapes need an explicit removal first.
+            if atomic_leaves && self.files.contains(path)
+                && inspect(destination, path)?.is_some_and(|m| !m.is_dir() || crate::generated_fs::is_link(&m))
+            {
+                continue;
+            }
             let path = destination.join(path);
             crate::generated_fs::check_path(destination, &path, true)?;
             match fs::symlink_metadata(&path) {

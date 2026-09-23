@@ -891,13 +891,13 @@ fn remove_index_path(index: &mut git2::Index, path: &Path) -> Result<(), Error> 
 }
 
 #[cfg(target_family = "unix")]
-fn copy_symlink(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn copy_symlink(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
     let target = std::fs::read_link(source)?;
     std::os::unix::fs::symlink(target, destination)
 }
 
 #[cfg(target_family = "windows")]
-fn copy_symlink(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn copy_symlink(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
     let target = std::fs::read_link(source)?;
     let resolved_target = source
         .parent()
@@ -915,7 +915,7 @@ fn copy_symlink(source: &Path, destination: &Path) -> Result<(), std::io::Error>
 }
 
 #[cfg(not(any(target_family = "unix", target_family = "windows")))]
-fn copy_symlink(_source: &Path, _destination: &Path) -> Result<(), std::io::Error> {
+pub(crate) fn copy_symlink(_source: &Path, _destination: &Path) -> Result<(), std::io::Error> {
     Err(std::io::Error::new(
         std::io::ErrorKind::Unsupported,
         "no symlink implementation available",
