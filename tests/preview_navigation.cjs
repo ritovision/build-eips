@@ -50,16 +50,20 @@ function stop(server) {
     const page=await context.newPage();
     const errors=[];
     page.on('pageerror',e=>errors.push(String(e)));
-    await page.goto(profile.base,{waitUntil:'networkidle'});
+    // Readiness is the rendered UI, not unrelated requests becoming idle.
+    // Search and popover assertions below still wait for their actual results.
+    const homeResponse=await page.goto(profile.base,{waitUntil:'domcontentloaded'});
+    assert.equal(homeResponse.status(),200);
+    await page.locator('h1').first().waitFor({state:'visible',timeout:15000});
     await page.screenshot({path:path.join(evidence,`${profile.name}-home.png`)});
-    await page.goto(profile.base+'search/?q=mynonce1',{waitUntil:'networkidle'});
+    await page.goto(profile.base+'search/?q=mynonce1',{waitUntil:'domcontentloaded'});
     const destination=page.locator('[data-search-page-results] a[href$="/5573/"]').first();
     await destination.waitFor({state:'visible',timeout:30000});
     await page.screenshot({path:path.join(evidence,`${profile.name}-search.png`)});
     await destination.click();
     await page.waitForURL(profile.base+'5573/',{timeout:15000});
     result.search_destination=page.url();
-    await page.goto(profile.base+'hardforks/',{waitUntil:'networkidle'});
+    await page.goto(profile.base+'hardforks/',{waitUntil:'domcontentloaded'});
     const metadata=await page.evaluate(async base => (await (await fetch(base+'assets/data/proposals.json')).json()).proposals,profile.base);
     result.popovers=[];
     for(const number of [606,1559]) {
