@@ -38,20 +38,43 @@ pub(crate) fn ensure_absent(root: &Path, relative: &str) -> Result<(), Whatever>
     }
 }
 
-fn route_is_reserved(route: &str) -> bool {
-    // Normalize lexical route components, including aliases with a leading slash.
-    let mut parts = Vec::new();
-    for component in Path::new(route.trim_matches('/')).components() {
-        match component {
-            Component::Normal(p) => parts.push(p.to_string_lossy().into_owned()),
-            Component::ParentDir => { parts.pop(); }
-            _ => {}
-        }
+fn confined_route(route: &str, source: &Path) -> Result<(), Whatever> {
+    // Zola appends route components to its output path. Never merely normalize
+    // traversal for comparison and then hand the original escape to the writer.
+    let route = route.trim();
+    if route.contains('\\') || route.contains('\0') || route.split('/').any(|part| {
+        part == ".." || (part.len() >= 2 && part.as_bytes()[0].is_ascii_alphabetic() && part.as_bytes()[1] == b':')
+    }) {
+        snafu::whatever!("route `{route}` in `{}` is not confined to the rendered site; parent traversal and filesystem prefixes are forbidden", source.display());
     }
-    let route = parts.join("/");
-    RESERVED.iter().filter_map(|r| r.route).any(|reserved| {
-        route == reserved || route.strip_prefix(reserved).is_some_and(|tail| tail.starts_with('/'))
-    })
+    Ok(())
+}
+
+fn route_is_reserved(route: &str) -> bool {
+    fn owned(route: &str) -> bool {
+        RESERVED.iter().filter_map(|r| r.route).any(|reserved| {
+            route == reserved || route.strip_prefix(reserved).is_some_and(|tail| tail.starts_with('/'))
+        })
+    }
+    let parts = Path::new(route.trim().trim_matches('/')).components()
+        .filter_map(|c| match c { Component::Normal(p) => Some(p.to_string_lossy().into_owned()), _ => None })
+        .collect::<Vec<_>>();
+    // Reserve equivalent names across Zola's on/safe/off strategies. Admission
+    // must stay valid when the independently watched theme changes strategy.
+    // `on` uses the same slug 0.1.6 implementation as Zola 0.22.1.
+    let exact = parts.join("/");
+    let normal = parts.iter().map(slug::slugify).collect::<Vec<_>>().join("/");
+    let safe = parts.iter().map(|p| p.trim_end_matches([' ', '.']).chars()
+        .filter(|c| !"<>:\"/\\|?*".contains(*c)).collect::<String>()).collect::<Vec<_>>().join("/");
+    owned(&exact) || owned(&normal) || owned(&safe)
+}
+
+fn check_route(route: &str, source: &Path) -> Result<(), Whatever> {
+    confined_route(route, source)?;
+    if route_is_reserved(route) {
+        snafu::whatever!("authored route `{route}` in `{}` collides with a reserved generated route", source.display());
+    }
+    Ok(())
 }
 
 #[derive(Default, Deserialize)]
@@ -60,10 +83,24 @@ struct RouteOverrides {
     path: Option<String>,
     slug: Option<String>,
     aliases: Vec<String>,
+    paginate_path: Option<String>,
+    taxonomies: std::collections::BTreeMap<String, Vec<String>>,
 }
 
-/// Only native Zola TOML can override a page's route here: proposal YAML is
-/// transformed to its numeric identity by markdown.rs, not forwarded to Zola.
+fn undated_name(name: &str) -> Option<&str> {
+    // Match the dated-filename behavior without interpreting ordinary dashes as
+    // dates. Both RFC3339 timestamps and YYYY-MM-DD prefixes can precede - or _.
+    name.char_indices().filter(|(_, c)| *c == '-' || *c == '_').find_map(|(i, _)| {
+        let prefix = name[..i].trim_end();
+        if prefix.len() >= 10 && (chrono::NaiveDate::parse_from_str(prefix, "%Y-%m-%d").is_ok()
+            || chrono::DateTime::parse_from_rfc3339(prefix).is_ok()) {
+            name.get(i + 1..).filter(|s| !s.is_empty())
+        } else { None }
+    })
+}
+
+/// YAML proposals get numeric routes from markdown.rs. Native Zola TOML retains
+/// explicit paths and infers slugs from filenames/bundles, so check both here.
 fn check_content_routes(content: &Path) -> Result<(), Whatever> {
     if !content.is_dir() { return Ok(()); }
     for entry in walkdir::WalkDir::new(content).follow_links(true) {
@@ -76,14 +113,41 @@ fn check_content_routes(content: &Path) -> Result<(), Whatever> {
         if lines.next().map(str::trim) != Some("+++") { continue; }
         let header = lines.take_while(|line| line.trim() != "+++").collect::<Vec<_>>().join("\n");
         let routes: RouteOverrides = toml::from_str(&header).with_whatever_context(|_| format!("unable to inspect route overrides in `{}`", entry.path().display()))?;
-        let mut candidates = routes.aliases;
-        if let Some(path) = routes.path { candidates.push(path); }
-        if let Some(slug) = routes.slug {
-            candidates.push(relative.parent().unwrap_or(Path::new("")).join(slug).to_string_lossy().into_owned());
+        for route in &routes.aliases { check_route(route, entry.path())?; }
+        if let Some(path) = &routes.path { check_route(path, entry.path())?; }
+        if let Some(slug) = &routes.slug { confined_route(slug, entry.path())?; }
+        if let Some(pagination) = &routes.paginate_path { confined_route(pagination, entry.path())?; }
+        for (taxonomy, terms) in &routes.taxonomies {
+            confined_route(taxonomy, entry.path())?;
+            for term in terms { confined_route(term, entry.path())?; }
         }
-        for route in candidates {
-            if route_is_reserved(&route) {
-                snafu::whatever!("authored route `{route}` in `{}` collides with a reserved generated route", entry.path().display());
+        if routes.path.is_some() { continue; }
+        let filename = relative.file_stem().unwrap().to_string_lossy();
+        let parent = relative.parent().unwrap_or(Path::new(""));
+        // Language-qualified bundle index names share the same bundle semantics.
+        // Check both qualified/unqualified forms so future language configuration
+        // cannot turn an admitted path into a reserved route.
+        let mut names = vec![filename.as_ref()];
+        if let Some((name, _)) = filename.split_once('.') { names.push(name); }
+        for name in names {
+            if name == "_index" {
+                check_route(&parent.to_string_lossy(), entry.path())?;
+                if let Some(pagination) = &routes.paginate_path {
+                    check_route(&parent.join(pagination).to_string_lossy(), entry.path())?;
+                }
+                continue;
+            }
+            let (container, default_slug) = if name == "index" {
+                if parent.as_os_str().is_empty() { continue; }
+                (parent.parent().unwrap_or(Path::new("")), parent.file_name().unwrap().to_string_lossy().into_owned())
+            } else { (parent, name.to_owned()) };
+            let mut slugs = vec![routes.slug.as_deref().unwrap_or(&default_slug)];
+            if routes.slug.is_none() {
+                if let Some(short) = undated_name(&default_slug) { slugs.push(short); }
+            }
+            for slug in slugs {
+                let route = container.join(slug);
+                check_route(&route.to_string_lossy(), entry.path())?;
             }
         }
     }
@@ -106,7 +170,7 @@ pub(crate) fn validate_inputs(root: &Path) -> Result<(), Whatever> {
         check_config_routes(&config, &path)?;
         if let Some(languages) = config.get("languages").and_then(|v| v.as_table()) {
             for (language, settings) in languages {
-                if route_is_reserved(language) { snafu::whatever!("language route `{language}` collides with a reserved generated route"); }
+                check_route(language, &path)?;
                 check_config_routes(settings, &path)?;
             }
         }
@@ -115,11 +179,40 @@ pub(crate) fn validate_inputs(root: &Path) -> Result<(), Whatever> {
 }
 
 fn check_config_routes(config: &toml::Value, path: &Path) -> Result<(), Whatever> {
-    let taxonomies = config.get("taxonomies").and_then(|v| v.as_array()).into_iter().flatten()
-        .filter_map(|v| v.get("name").and_then(|v| v.as_str()));
-    let feeds = config.get("feed_filenames").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str());
-    for route in taxonomies.chain(feeds) {
-        if route_is_reserved(route) { snafu::whatever!("Zola route `{route}` in `{}` collides with a reserved generated route", path.display()); }
+    for field in ["taxonomy_root", "default_language"] {
+        if let Some(value) = config.get(field).and_then(|v| v.as_str()) { check_route(value, path)?; }
+    }
+    for taxonomy in config.get("taxonomies").and_then(|v| v.as_array()).into_iter().flatten() {
+        for field in ["name", "slug"] {
+            if let Some(value) = taxonomy.get(field).and_then(|v| v.as_str()) { check_route(value, path)?; }
+        }
+        if let Some(value) = taxonomy.get("paginate_path").and_then(|v| v.as_str()) { confined_route(value, path)?; }
+    }
+    for route in config.get("feed_filenames").and_then(|v| v.as_array()).into_iter().flatten().filter_map(|v| v.as_str()) {
+        check_route(route, path)?;
+    }
+    Ok(())
+}
+
+/// Git tracks files, not empty working directories. Removing a rejected raw
+/// candidate's leaf paths can leave empty directories behind in the private
+/// stage. Remove only those empty reserved directories before admission. Never
+/// call this on authored checkouts or rendered output; occupied paths still fail.
+pub(crate) fn clear_empty_staged_reservations(root: &Path) -> Result<(), Whatever> {
+    for relative in RESERVED.iter().flat_map(|r| r.inputs.iter()) {
+        let path = root.join(relative);
+        crate::generated_fs::check_path(root, &path, false)
+            .whatever_context("unsafe reserved staging path")?;
+        if !path.is_dir() { continue; }
+        for entry in walkdir::WalkDir::new(&path).contents_first(true).follow_links(false) {
+            let entry = entry.whatever_context("unable to inspect reserved staging directories")?;
+            if !entry.file_type().is_dir() { continue; }
+            match fs::remove_dir(entry.path()) {
+                Ok(()) => {},
+                Err(e) if matches!(e.kind(), std::io::ErrorKind::DirectoryNotEmpty | std::io::ErrorKind::NotFound) => {},
+                Err(e) => return Err(e).whatever_context("unable to clear empty reserved staging directory"),
+            }
+        }
     }
     Ok(())
 }
@@ -180,6 +273,81 @@ mod configured_route_regressions {
             std::fs::create_dir(temp.path().join("config")).unwrap();
             std::fs::write(temp.path().join("config/zola.toml"), text).unwrap();
             assert!(validate_inputs(temp.path()).is_err(), "{text}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod staging_recovery_regressions {
+    use super::*;
+    #[test]
+    fn rejected_leaf_removal_does_not_poison_later_admission() {
+        let temp = tempfile::tempdir().unwrap();
+        for relative in ["static/assets/generated/nested/bad.txt", "data/build_eips_search.toml/bad.txt"] {
+            let path = temp.path().join(relative);
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, "KEEP").unwrap();
+            clear_empty_staged_reservations(temp.path()).unwrap();
+            assert_eq!(fs::read_to_string(&path).unwrap(), "KEEP");
+            assert!(validate_inputs(temp.path()).is_err());
+            fs::remove_file(path).unwrap();
+            clear_empty_staged_reservations(temp.path()).unwrap();
+            validate_inputs(temp.path()).unwrap();
+        }
+        fs::create_dir_all(temp.path().join("static/unrelated-empty")).unwrap();
+        clear_empty_staged_reservations(temp.path()).unwrap();
+        assert!(temp.path().join("static/unrelated-empty").is_dir());
+    }
+}
+
+#[cfg(test)]
+mod reviewer_route_regressions {
+    use super::*;
+    fn fixture(relative: &str, header: &str) -> tempfile::TempDir {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("content").join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, format!("+++\n{header}\n+++\nBody\n")).unwrap();
+        temp
+    }
+    #[test]
+    fn effective_filename_date_bundle_and_slug_routes_are_reserved() {
+        for (name, header) in [
+            ("Search.md", ""), ("2026-09-22-pagefind.md", ""),
+            ("2026-09-22T12:00:00Z-pagefind.md", ""), ("Search.fr.md", ""),
+            ("bundle/index.md", "slug='pagefind'"), ("bundle/index.fr.md", "slug='Search'"),
+            ("ordinary.md", "slug='pâgefind'"), ("ordinary.md", "slug='Search!'"),
+            ("_index.md", "paginate_path='search'"),
+        ] {
+            let temp = fixture(name, header);
+            let error = validate_inputs(temp.path()).unwrap_err().to_string();
+            assert!(error.contains("reserved generated route"), "{name}: {error}");
+        }
+        for name in ["reference/Search.md", "ordinary.md", "index.md", "_index.md"] {
+            validate_inputs(fixture(name, "").path()).unwrap();
+        }
+    }
+    #[test]
+    fn parent_escape_and_filesystem_prefixes_never_reach_renderer() {
+        for header in ["aliases=['../../output/index.html']", "path='../../output/hijacked'",
+            "slug='../bad'", "paginate_path='../bad'", "aliases=['C:/output/index.html']",
+            r"aliases=['..\output\index.html']", "[taxonomies]\nTag=['../../bad']"] {
+            let temp = fixture("ordinary.md", header);
+            let error = validate_inputs(temp.path()).unwrap_err().to_string();
+            assert!(error.contains("not confined"), "{header}: {error}");
+        }
+        let temp = fixture("ordinary.md", "aliases=['/old-route/','docs/archive.html']");
+        validate_inputs(temp.path()).unwrap();
+    }
+    #[test]
+    fn configured_normalization_and_destinations_cannot_bypass_ownership() {
+        for config in ["taxonomies=[{name='Search'}]", "taxonomies=[{name='pâgefind'}]",
+            "taxonomy_root='search'", "feed_filenames=['../../output/index.html']",
+            "taxonomies=[{name='ordinary',paginate_path='../../bad'}]"] {
+            let temp = tempfile::tempdir().unwrap();
+            fs::create_dir(temp.path().join("config")).unwrap();
+            fs::write(temp.path().join("config/zola.toml"), config).unwrap();
+            assert!(validate_inputs(temp.path()).is_err(), "{config}");
         }
     }
 }

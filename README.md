@@ -162,3 +162,17 @@ Normal `build --search-corpus` output is always
 migrated. Standalone `corpus --output` is separately planned, not implemented here.
 Ordinary authored files outside the reserved paths, including a file named
 `search-corpus.json`, are not deleted as presumed legacy data.
+
+Reservation admission includes native Zola filename/date-derived slugs, colocated
+bundle index slugs, explicit paths/aliases and configured taxonomy/feed routes.
+Reserved names and their normal/safe slug equivalents stay reserved across theme
+slugification changes; this deliberately conservative boundary avoids coupling
+raw source admission to a separately watched theme configuration. Language/date
+variants cannot introduce a reserved route later. The slug implementation is the
+same already-locked 0.1.6 library used by Zola 0.22.1.
+
+Declarative filesystem destinations cannot contain parent traversal, backslashes
+or drive prefixes. Invalid aliases/paths are rejected before Zola can escape a
+private candidate and touch a completed build. After rejection, only empty
+reserved directories in disposable raw staging are pruned, allowing recovery;
+authored files and rendered output are never removed by this recovery step.

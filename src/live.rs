@@ -328,6 +328,7 @@ impl LiveSource {
             .whatever_context("unable to stage current tracked source changes")?;
         crate::source_reads::validate_tree(&self.stage)
             .whatever_context("candidate source-read policy rejected; last-good input retained")?;
+        crate::reserved::clear_empty_staged_reservations(&self.stage)?;
         crate::reserved::validate_inputs(&self.stage)
             .whatever_context("candidate occupies reserved generated paths; last-good input retained")?;
         let mut index = repo
