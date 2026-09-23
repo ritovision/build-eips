@@ -77,6 +77,18 @@ fn check_route(route: &str, source: &Path) -> Result<(), Whatever> {
     Ok(())
 }
 
+/// Zola slugifies the entire slug field, unlike a route's separate components.
+/// For example safe-mode taxonomy "se/arch" is one slug "search", not two paths.
+fn check_slug(container: &Path, value: &str, source: &Path) -> Result<(), Whatever> {
+    confined_route(value, source)?;
+    let safe = value.trim_end_matches([' ', '.']).chars()
+        .filter(|c| !"<>:\"/\\|?*".contains(*c)).collect::<String>();
+    for variant in [value.to_owned(), slug::slugify(value), safe] {
+        check_route(&container.join(variant).to_string_lossy(), source)?;
+    }
+    Ok(())
+}
+
 #[derive(Default, Deserialize)]
 #[serde(default)]
 struct RouteOverrides {
@@ -146,8 +158,7 @@ fn check_content_routes(content: &Path) -> Result<(), Whatever> {
                 if let Some(short) = undated_name(&default_slug) { slugs.push(short); }
             }
             for slug in slugs {
-                let route = container.join(slug);
-                check_route(&route.to_string_lossy(), entry.path())?;
+                check_slug(container, slug, entry.path())?;
             }
         }
     }
@@ -184,7 +195,7 @@ fn check_config_routes(config: &toml::Value, path: &Path) -> Result<(), Whatever
     }
     for taxonomy in config.get("taxonomies").and_then(|v| v.as_array()).into_iter().flatten() {
         for field in ["name", "slug"] {
-            if let Some(value) = taxonomy.get(field).and_then(|v| v.as_str()) { check_route(value, path)?; }
+            if let Some(value) = taxonomy.get(field).and_then(|v| v.as_str()) { check_slug(Path::new(""), value, path)?; }
         }
         if let Some(value) = taxonomy.get("paginate_path").and_then(|v| v.as_str()) { confined_route(value, path)?; }
     }
@@ -349,5 +360,27 @@ mod reviewer_route_regressions {
             fs::write(temp.path().join("config/zola.toml"), config).unwrap();
             assert!(validate_inputs(temp.path()).is_err(), "{config}");
         }
+    }
+}
+
+#[cfg(test)]
+mod whole_slug_regressions {
+    use super::*;
+    #[test]
+    fn safe_mode_normalizes_whole_fields_not_route_segments() {
+        for slug in ["se/arch", "hard/forks", "page/find"] {
+            assert!(check_slug(Path::new(""), slug, Path::new("fixture")).is_err(), "{slug}");
+            check_slug(Path::new("reference"), slug, Path::new("fixture")).unwrap();
+        }
+        for config in ["taxonomies=[{name='se/arch'}]\n[slugify]\ntaxonomies='safe'", "taxonomies=[{name='hard/forks'}]"] {
+            let temp = tempfile::tempdir().unwrap();
+            fs::create_dir(temp.path().join("config")).unwrap();
+            fs::write(temp.path().join("config/zola.toml"), config).unwrap();
+            assert!(validate_inputs(temp.path()).is_err());
+        }
+        let temp = tempfile::tempdir().unwrap();
+        fs::create_dir(temp.path().join("content")).unwrap();
+        fs::write(temp.path().join("content/ordinary.md"), "+++\nslug='se/arch'\n+++\n").unwrap();
+        assert!(validate_inputs(temp.path()).is_err());
     }
 }
