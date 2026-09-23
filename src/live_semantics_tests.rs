@@ -103,6 +103,25 @@ impl Fixture {
     }
 }
 
+#[cfg(windows)]
+#[test]
+fn private_live_clone_enables_long_paths_without_changing_source_config() {
+    let fixture = Fixture::new(false);
+    let source_config = std::fs::read(fixture.source.join(".git/config")).unwrap();
+    let live_config = std::fs::read(fixture.live.join(".git/config")).unwrap();
+    let state = fixture.state();
+    let staged = Repository::open(&state.stage).unwrap();
+    assert!(staged.config().unwrap().get_bool("core.longpaths").unwrap());
+    assert_eq!(
+        std::fs::read(fixture.source.join(".git/config")).unwrap(),
+        source_config
+    );
+    assert_eq!(
+        std::fs::read(fixture.live.join(".git/config")).unwrap(),
+        live_config
+    );
+}
+
 #[test]
 fn body_only_is_one_write_without_aggregate_or_unrelated_churn() {
     let fixture = Fixture::new(false);

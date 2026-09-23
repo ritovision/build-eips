@@ -143,12 +143,21 @@ impl LiveSource {
             )
             .whatever_context("unable to create private live staging directory")?;
         let stage = scratch.path().join("repo");
-        let repo = Repository::clone(
-            live.to_str()
-                .whatever_context("non-UTF-8 live repository path")?,
-            &stage,
-        )
-        .whatever_context("unable to clone prepared raw input for serving")?;
+        let mut builder = git2::build::RepoBuilder::new();
+        // The private live clone needs the same Windows checkout policy as the
+        // initial generated repository, before fetch/checkout creates files.
+        builder.remote_create(|repo, name, url| {
+            #[cfg(windows)]
+            repo.config()?.set_bool("core.longpaths", true)?;
+            repo.remote(name, url)
+        });
+        let repo = builder
+            .clone(
+                live.to_str()
+                    .whatever_context("non-UTF-8 live repository path")?,
+                &stage,
+            )
+            .whatever_context("unable to clone prepared raw input for serving; for external Git path limits, use a shorter --build-root")?;
         crate::generated_git::validate(&repo, &stage)
             .whatever_context("unsafe generated live repository")?;
         let initial_merged =
