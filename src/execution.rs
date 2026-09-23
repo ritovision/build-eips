@@ -765,7 +765,7 @@ only = []
         assert!(message.contains(&format!(
             "workspace-local theme path `{}` does not exist",
             workspace
-                .path()
+                .path().canonicalize().unwrap()
                 .join(config::DEFAULT_THEME_DIR)
                 .to_string_lossy()
         )));

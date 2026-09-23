@@ -778,7 +778,7 @@ pub(crate) fn parse_proposal_preamble<'a>(
     contents: &'a str,
 ) -> Result<Preamble<'a>, Whatever> {
     let path_lossy = markdown_path.to_string_lossy();
-    let (preamble, _) = Preamble::split(contents)
+    let (preamble, _) = crate::source_text::split_preamble(contents)
         .with_whatever_context(|_| format!("couldn't split preamble for `{path_lossy}`"))?;
     Preamble::parse(None, preamble)
         .ok()

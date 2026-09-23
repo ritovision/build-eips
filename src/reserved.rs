@@ -6,7 +6,7 @@
 
 //! Finite generator ownership, not a provenance registry. Check raw inputs before
 //! generation and live publication; check post-Zola destinations before indexing.
-use std::{fs, path::{Component, Path}};
+use std::{fs, path::Path};
 use serde::Deserialize;
 use snafu::{ResultExt, Whatever};
 
@@ -56,9 +56,8 @@ fn route_is_reserved(route: &str) -> bool {
             route == reserved || route.strip_prefix(reserved).is_some_and(|tail| tail.starts_with('/'))
         })
     }
-    let parts = Path::new(route.trim().trim_matches('/')).components()
-        .filter_map(|c| match c { Component::Normal(p) => Some(p.to_string_lossy().into_owned()), _ => None })
-        .collect::<Vec<_>>();
+    let parts = route.trim().trim_matches('/').split('/')
+        .filter(|part| !part.is_empty() && *part != ".").map(ToOwned::to_owned).collect::<Vec<_>>();
     // Reserve equivalent names across Zola's on/safe/off strategies. Admission
     // must stay valid when the independently watched theme changes strategy.
     // `on` uses the same slug 0.1.6 implementation as Zola 0.22.1.
@@ -84,7 +83,9 @@ fn check_slug(container: &Path, value: &str, source: &Path) -> Result<(), Whatev
     let safe = value.trim_end_matches([' ', '.']).chars()
         .filter(|c| !"<>:\"/\\|?*".contains(*c)).collect::<String>();
     for variant in [value.to_owned(), slug::slugify(value), safe] {
-        check_route(&container.join(variant).to_string_lossy(), source)?;
+        let container = crate::site_path::relative(container)?;
+        let route = if container.is_empty() { variant } else { format!("{container}/{variant}") };
+        check_route(&route, source)?;
     }
     Ok(())
 }
@@ -162,7 +163,7 @@ pub(crate) fn explicit_content_path(contents: &str, source: &Path) -> Result<Opt
 }
 
 fn generated_content_route(relative: &Path) -> bool {
-    matches!(relative.to_str(), Some("search.md" | "hardforks/_index.md"))
+    relative == Path::new("search.md") || relative == Path::new("hardforks").join("_index.md")
 }
 
 fn validate_route(route: &str, source: &Path, generated: bool) -> Result<(), Whatever> {
@@ -201,9 +202,9 @@ fn check_content_routes(content: &Path, prepared: bool) -> Result<(), Whatever> 
         if let Some((name, _)) = filename.split_once('.') { names.push(name); }
         for name in names {
             if name == "_index" {
-                validate_route(&parent.to_string_lossy(), entry.path(), generated)?;
+                validate_route(&crate::site_path::relative(parent)?, entry.path(), generated)?;
                 if let Some(pagination) = &routes.paginate_path {
-                    validate_route(&parent.join(pagination).to_string_lossy(), entry.path(), generated)?;
+                    validate_route(&format!("{}/{pagination}", crate::site_path::relative(parent)?), entry.path(), generated)?;
                 }
                 continue;
             }
@@ -394,14 +395,17 @@ mod reviewer_route_regressions {
     fn effective_filename_date_bundle_and_slug_routes_are_reserved() {
         for (name, header) in [
             ("Search.md", ""), ("2026-09-22-pagefind.md", ""),
-            ("2026-09-22T12:00:00Z-pagefind.md", ""), ("Search.fr.md", ""),
+            ("2026-09-22_pagefind.md", ""), ("Search.fr.md", ""),
             ("bundle/index.md", "slug='pagefind'"), ("bundle/index.fr.md", "slug='Search'"),
             ("ordinary.md", "slug='pâgefind'"), ("ordinary.md", "slug='Search!'"),
             ("_index.md", "paginate_path='search'"),
         ] {
             let temp = fixture(name, header);
             let error = validate_inputs(temp.path()).unwrap_err().to_string();
-            assert!(error.contains("reserved generated route"), "{name}: {error}");
+            // On case-insensitive hosts Search.md already occupies search.md;
+            // the earlier filesystem reservation is the same rejection contract.
+            assert!(error.contains("reserved generated route") ||
+                (error.contains("reserved generated path") && error.contains("occupied")), "{name}: {error}");
         }
         for name in ["reference/Search.md", "ordinary.md", "index.md", "_index.md"] {
             validate_inputs(fixture(name, "").path()).unwrap();
@@ -519,5 +523,23 @@ mod yaml_prepared_route_regressions {
         fs::create_dir_all(&content).unwrap();
         fs::write(content.join("ordinary.md"), "+++\nslug='search'\n+++\nBody\n").unwrap();
         validate_inputs(temp.path()).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod windows_route_regressions {
+    use super::*;
+    #[test]
+    fn dated_filename_route_is_checked_without_creating_a_windows_invalid_name() {
+        assert_eq!(undated_name("2026-09-22T12:00:00Z-pagefind"), Some("pagefind"));
+        assert!(check_slug(Path::new(""), undated_name("2026-09-22T12:00:00Z-pagefind").unwrap(), Path::new("fixture")).is_err());
+    }
+    #[test]
+    fn nested_section_pagination_uses_site_separators() {
+        let t = tempfile::tempdir().unwrap();
+        let content = t.path().join("content");
+        fs::create_dir_all(content.join("docs")).unwrap();
+        fs::write(content.join("docs/_index.md"), "+++\npaginate_path='pages'\n+++\n").unwrap();
+        validate_inputs(t.path()).unwrap();
     }
 }

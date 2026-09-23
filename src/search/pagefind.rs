@@ -89,7 +89,9 @@ mod tests {
 
     use crate::search::SearchIndexRequest;
 
-    use super::{index_site, prepare_pagefind_output_path, PAGEFIND_DIR};
+    use super::{index_site, PAGEFIND_DIR};
+    #[cfg(target_family = "unix")]
+    use super::prepare_pagefind_output_path;
 
     fn write_file(root: &Path, relative: impl AsRef<Path>, contents: &str) {
         let path = root.join(relative);
@@ -151,7 +153,7 @@ mod tests {
         .unwrap();
 
         assert!(summary.pages_indexed >= 1);
-        assert_eq!(summary.output_path, output_path.join(PAGEFIND_DIR));
+        assert_eq!(summary.output_path, output_path.join(PAGEFIND_DIR).canonicalize().unwrap());
         assert_pagefind_artifacts(&output_path.join(PAGEFIND_DIR));
         assert!(!prepared_source_path.join(PAGEFIND_DIR).exists());
         assert!(!temp.path().join(PAGEFIND_DIR).exists());

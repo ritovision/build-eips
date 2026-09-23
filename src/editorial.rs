@@ -41,8 +41,11 @@ fn repo_relative_canonical_path(
         );
     }
 
+    let canonical_root = root_path
+        .canonicalize()
+        .whatever_context("unable to resolve active repository root")?;
     let relative = canonical_path
-        .strip_prefix(root_path)
+        .strip_prefix(&canonical_root)
         .with_whatever_context(|_| {
             format!(
                 "editorial target `{}` escapes the active repository root",
@@ -741,9 +744,10 @@ mod tests {
         .unwrap_err()
         .to_string();
 
-        assert!(error.contains(
-            "editorial target `content/00003.md` exists in the active repo but was not materialized into the prepared source tree"
-        ));
+        assert!(error.contains(&format!(
+            "editorial target `{}` exists in the active repo but was not materialized into the prepared source tree",
+            Path::new("content").join("00003.md").display()
+        )));
         assert!(error.contains("untracked files are not supported"));
     }
 

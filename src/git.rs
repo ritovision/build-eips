@@ -570,7 +570,36 @@ fn effective_tracked_worktree_paths(root: &Path) -> Result<BTreeSet<PathBuf>, Er
             None => {}
         }
     }
+    #[cfg(windows)]
+    discard_replaced_case_aliases(root, &mut paths)?;
     Ok(paths)
+}
+
+#[cfg(windows)]
+fn discard_replaced_case_aliases(root: &Path, paths: &mut BTreeSet<PathBuf>) -> Result<(), Error> {
+    let repo = git2::Repository::open(root).context(GitSnafu { what: "inspect case-only source rename" })?;
+    let index = repo.index().context(GitSnafu { what: "read case-only rename index" })?;
+    let indexed: BTreeSet<PathBuf> = index.iter().map(|entry| {
+        std::str::from_utf8(&entry.path).map(PathBuf::from)
+            .map_err(|_| UpdateTreeSnafu { msg: "tracked paths must be UTF-8".to_owned() }.build())
+    }).collect::<Result<_, _>>()?;
+    let key = |path: &Path| path.components().map(|c| portable_component_key(c.as_os_str())).collect::<Result<Vec<_>, _>>();
+    let mut replacements = std::collections::BTreeMap::new();
+    for path in paths.iter().filter(|path| indexed.contains(*path)) {
+        let full = root.join(path);
+        let canonical = full.canonicalize().with_context(|_| IoSnafu { path: &full })?;
+        replacements.entry(key(path)?).or_insert_with(Vec::new).push(canonical);
+    }
+    let mut obsolete = Vec::new();
+    for path in paths.iter().filter(|path| !indexed.contains(*path)) {
+        if let Some(targets) = replacements.get(&key(path)?) {
+            let full = root.join(path);
+            let canonical = full.canonicalize().with_context(|_| IoSnafu { path: &full })?;
+            if targets.contains(&canonical) { obsolete.push(path.clone()); }
+        }
+    }
+    for path in obsolete { paths.remove(&path); }
+    Ok(())
 }
 
 /// Validate the exact tracked membership that dirty/live materialization would
@@ -1752,6 +1781,9 @@ fn open_or_init(dir: &Path) -> Result<git2::Repository, Error> {
             Err(e) => return Err(GitSnafu { what: "open repo" }.into_error(e)),
         };
     crate::generated_git::validate(&repo, dir).with_context(|_| IoSnafu { path: dir })?;
+    #[cfg(windows)]
+    repo.config().and_then(|mut config| config.set_bool("core.longpaths", true))
+        .context(GitSnafu { what: "enable long paths in private generated checkout; alternatively use a shorter --build-root" })?;
     Ok(repo)
 }
 
@@ -1767,6 +1799,25 @@ mod tests {
         tracked_working_tree_paths, Fresh, SourceMaterialization,
     };
     use crate::config::{Location, RepositoryUse};
+
+    #[cfg(windows)]
+    #[test]
+    fn private_checkout_handles_long_paths_without_global_configuration() {
+        let t = tempfile::tempdir().unwrap();
+        let root = t.path().join("internal-generated-checkout-".repeat(3));
+        let repo = super::open_or_init(&root).unwrap();
+        assert!(repo.config().unwrap().get_bool("core.longpaths").unwrap());
+        let name = format!("{}.pdf", "existing-documentation-asset-".repeat(5));
+        assert!(root.join(&name).as_os_str().len() > 260);
+        let blob = repo.blob(b"fixture PDF bytes").unwrap();
+        let mut builder = repo.treebuilder(None).unwrap();
+        builder.insert(&name, blob, 0o100644).unwrap();
+        let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+        let signature = Signature::now("fixture", "fixture@example.test").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "long-path fixture", &tree, &[]).unwrap();
+        repo.checkout_head(Some(git2::build::CheckoutBuilder::new().force())).unwrap();
+        assert_eq!(std::fs::read(root.canonicalize().unwrap().join(name)).unwrap(), b"fixture PDF bytes");
+    }
 
     fn file_url(path: &Path) -> url::Url {
         url::Url::from_directory_path(path).unwrap()
@@ -1891,7 +1942,7 @@ mod tests {
             .find_reference("refs/build-eips/theme-pin")
             .is_ok());
         assert_eq!(
-            std::fs::read_to_string(destination.join("PINNED.md")).unwrap(),
+            std::fs::read_to_string(destination.join("PINNED.md")).unwrap().replace("\r\n", "\n"),
             "pinned
 "
         );
@@ -1946,7 +1997,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(prepared.join("content/_index.md")).unwrap(),
+            std::fs::read_to_string(prepared.join("content/_index.md")).unwrap().replace("\r\n", "\n"),
             "active homepage\n"
         );
         assert!(prepared.join("content/00678.md").is_file());
@@ -2136,17 +2187,19 @@ mod tests {
     fn tracked_case_collisions_fail_on_case_sensitive_hosts_but_case_rename_is_valid() {
         let temp = TempDir::new().unwrap();
         let root = temp.path().join("source");
-        let repo = init_repo(&root, &[("A.md", "upper\n"), ("a.md", "lower\n")]);
-        let error = super::validate_portable_worktree(&root).unwrap_err();
-        assert!(error.to_string().contains("case-insensitive filesystem"));
-        let tree = repo
-            .head()
-            .unwrap()
-            .peel_to_commit()
-            .unwrap()
-            .tree()
-            .unwrap();
+        let repo = init_repo(&root, &[("A.md", "upper\n")]);
+        let case_sensitive = !root.join("a.md").exists();
+        let base = repo.head().unwrap().peel_to_commit().unwrap().tree().unwrap();
+        let mut builder = repo.treebuilder(Some(&base)).unwrap();
+        builder.insert("a.md", repo.blob(b"lower\n").unwrap(), 0o100644).unwrap();
+        let tree = repo.find_tree(builder.write().unwrap()).unwrap();
         assert!(super::validate_portable_tree(&tree).is_err());
+        if case_sensitive {
+            write_file(&root, "a.md", "lower\n");
+            commit_all(&repo, "colliding physical files");
+            let error = super::validate_portable_worktree(&root).unwrap_err();
+            assert!(error.to_string().contains("case-insensitive filesystem"));
+        }
         drop(tree);
 
         let rename = temp.path().join("rename");
@@ -2158,14 +2211,15 @@ mod tests {
         index.write().unwrap();
         super::validate_portable_worktree(&rename).unwrap();
 
-        let collision = temp.path().join("unstaged-rename-collision");
-        init_repo(&collision, &[("A.md", "upper\n"), ("B.md", "other\n")]);
-        std::fs::rename(collision.join("B.md"), collision.join("a.md")).unwrap();
-        let error = super::validate_portable_worktree(&collision).unwrap_err();
-        assert!(
-            error.to_string().contains("case-insensitive filesystem"),
-            "{error}"
-        );
+        // This physical two-file state cannot exist on a case-insensitive
+        // volume. Its Git-tree equivalent is still tested above on every host.
+        if case_sensitive {
+            let collision = temp.path().join("unstaged-rename-collision");
+            init_repo(&collision, &[("A.md", "upper\n"), ("B.md", "other\n")]);
+            std::fs::rename(collision.join("B.md"), collision.join("a.md")).unwrap();
+            let error = super::validate_portable_worktree(&collision).unwrap_err();
+            assert!(error.to_string().contains("case-insensitive filesystem"), "{error}");
+        }
     }
 
     #[test]
@@ -2180,8 +2234,13 @@ mod tests {
             .unwrap()
             .id()
             .to_string();
-        write_file(&source, "a.md", "collision\n");
-        commit_all(&repo, "colliding default head");
+        let parent = repo.head().unwrap().peel_to_commit().unwrap();
+        let base = parent.tree().unwrap();
+        let mut builder = repo.treebuilder(Some(&base)).unwrap();
+        builder.insert("a.md", repo.blob(b"collision\n").unwrap(), 0o100644).unwrap();
+        let tree = repo.find_tree(builder.write().unwrap()).unwrap();
+        let signature = Signature::now("fixture", "fixture@example.test").unwrap();
+        repo.commit(Some("HEAD"), &signature, &signature, "colliding default head", &tree, &[&parent]).unwrap();
 
         let unpinned = temp.path().join("workspace/unpinned");
         let error = super::clone_missing_repo(file_url(&source).as_str(), &unpinned).unwrap_err();
@@ -2202,7 +2261,11 @@ mod tests {
             safe
         );
         assert!(pinned.join("A.md").is_file());
-        assert!(!pinned.join("a.md").exists());
+        let names: Vec<_> = std::fs::read_dir(&pinned).unwrap()
+            .map(|entry| entry.unwrap().file_name()).collect();
+        assert!(names.iter().any(|name| name == "A.md"));
+        assert!(!names.iter().any(|name| name == "a.md"));
+        assert_eq!(std::fs::read_to_string(pinned.join("A.md")).unwrap().replace("\r\n", "\n"), "safe\n");
     }
 
     #[test]

@@ -272,3 +272,14 @@ fn rendered_url(output_path: &Path, html_path: &Path, base_path: &str) -> Result
     }
     Ok(format!("{base_path}{}", encoded.path().trim_start_matches('/')))
 }
+
+#[cfg(test)]
+mod portable_encoding_regression {
+    use super::*;
+    #[test]
+    fn question_mark_is_encoded_once_without_requiring_an_invalid_windows_file() {
+        let root = Path::new("rendered");
+        let html = root.join("reference").join("café 100% #?").join("index.html");
+        assert_eq!(rendered_url(root, &html, "/wg/EIPs/").unwrap(), "/wg/EIPs/reference/caf%C3%A9%20100%25%20%23%3F/");
+    }
+}

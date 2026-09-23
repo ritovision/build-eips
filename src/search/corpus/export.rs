@@ -269,7 +269,7 @@ mod tests {
     fn export_encodes_filesystem_segments_exactly_once() {
         let dir = tempfile::tempdir().unwrap();
         let rendered = dir.path().join("rendered");
-        let special = rendered.join("reference/café 100% #?/");
+        let special = rendered.join("reference/café 100% #/");
         fs::create_dir_all(&special).unwrap();
         fs::write(
             special.join("index.html"),
@@ -289,11 +289,11 @@ mod tests {
             serde_json::from_slice(&fs::read(dest.path()).unwrap()).unwrap();
         assert_eq!(
             value["documents"][0]["url"],
-            "https://example.test/wg/EIPs/reference/caf%C3%A9%20100%25%20%23%3F/"
+            "https://example.test/wg/EIPs/reference/caf%C3%A9%20100%25%20%23/"
         );
         assert_eq!(
             value["chunks"][0]["url"],
-            "https://example.test/wg/EIPs/reference/caf%C3%A9%20100%25%20%23%3F/#section%25%20caf%C3%A9"
+            "https://example.test/wg/EIPs/reference/caf%C3%A9%20100%25%20%23/#section%25%20caf%C3%A9"
         );
     }
 

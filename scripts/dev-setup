@@ -497,6 +497,9 @@ fi
 
 [ -x "$BUILD_EIPS" ] || die "local build-eips was not built at $BUILD_EIPS"
 
+TARGET_DEBUG_DIR=$PREPROCESSOR_ROOT/target/debug
+move_dir_to_front_of_script_path "$TARGET_DEBUG_DIR"
+
 ensure_zola
 
 say "Bootstrapping local contributor workspace"
@@ -538,8 +541,6 @@ if [ -n "$PATH_NOTES" ]; then
     done
     IFS=$old_ifs
 fi
-
-TARGET_DEBUG_DIR=$PREPROCESSOR_ROOT/target/debug
 
 say ""
 say "Next commands:"

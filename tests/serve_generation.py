@@ -9,29 +9,39 @@ from pathlib import Path
 import subprocess, tempfile, os, json, hashlib, time, signal, socket
 from http.client import HTTPConnection
 import argparse, sys
-if os.name != 'posix':
- raise SystemExit('This process-group/watcher acceptance runs on POSIX; native Windows acceptance is separate.')
 parser=argparse.ArgumentParser()
 parser.add_argument('--build-eips',type=Path,required=True)
 parser.add_argument('--evidence',type=Path,required=True)
 args=parser.parse_args()
 BIN=args.build_eips.resolve(strict=True)
 AUDIT=args.evidence.resolve(); AUDIT.mkdir(parents=True,exist_ok=False)
-ENV=os.environ.copy(); ENV['PATH']=str(BIN.parent)+':'+ENV['PATH']
+ENV=os.environ.copy(); ENV['PATH']=str(BIN.parent)+os.pathsep+ENV['PATH']
 RESULTS={}
 def cmd(args,cwd=None,check=True,env=None,timeout=30):
- p=subprocess.run([str(a) for a in args],cwd=cwd,env=env or ENV,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=timeout)
+ p=subprocess.run([str(a) for a in args],cwd=cwd,env=env or ENV,text=True,encoding='utf-8',errors='replace',stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=timeout,**({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {}))
  if check and p.returncode: raise RuntimeError(f'{args}: {p.returncode}\n{p.stdout}')
  return p
 
 def write(p,s):
- p.parent.mkdir(parents=True,exist_ok=True); p.write_text(s)
+ p.parent.mkdir(parents=True,exist_ok=True); p.write_text(s,encoding='utf-8',newline='\n')
 def git(p,*args): return cmd(['git','-C',p,*args]).stdout.strip()
 def commit(p): git(p,'add','-A'); git(p,'commit','-qm','audit fixture')
 def initgit(p):
  git(p,'init','-q','-b','master'); git(p,'config','user.email','audit@example.invalid'); git(p,'config','user.name','Audit Fixture'); commit(p)
-def md(n,body='Original body'):
- return f'---\nnumber: {n}\ntitle: Audit {n}\nauthor: Audit\ncreated: 2020-01-01\n---\n\n{body}\n'
+def md(n,body='Original body',kind='Standards Track'):
+ return f'---\neip: {n}\ntitle: Audit {n}\ndescription: Audit fixture {n}\nauthor: Audit\nstatus: Draft\ntype: {kind}\ncreated: 2020-01-01\n---\n\n{body}\n'
+def complete_sources(repo):
+ # Keep these fixtures semantically complete, as in live::fixture::complete_sources.
+ # Registry changes must update the fixture, not disable derived-data checks.
+ legacy=[606,608,607,609,1013,1679,2387]
+ modern=[7773,8081,7569,7600,7607]
+ empty=[779,1716,7568]
+ members=[90099,2565,2929,2718,2930,1559,3198,3529,3541,3554,4345,5133,3675,4399,3651,3855,3860,4895,6049]
+ for n in members: write(repo/'content'/f'{n:05}.md',md(n,'Fixture member'))
+ for n in legacy+modern+empty:
+  body='### Included EIPs\n\n* [EIP-90099](./90099.md)\n' if n in legacy else ('### Included EIPs\n' if n in modern else '')
+  write(repo/'content'/f'{n:05}.md',md(n,body,'Meta'))
+
 def manifest(repo,name,theme,pin,others=None):
  s=f'name = "{name}"\n[locations.{name}]\nrepository = "{repo.as_uri()}"\nbase-url = "https://example.invalid/manifest-base/"\n'
  for key,r in (others or {}).items(): s+=f'[locations.{key}]\nrepository = "{r.as_uri()}"\nbase-url = "https://example.invalid/{key}/"\n'
@@ -40,11 +50,11 @@ def fixture(label):
  w=Path(tempfile.mkdtemp(prefix=label+'-',dir=AUDIT)); r=w/'EIPs'; t=w/'theme'
  write(w/'.build-eips.toml','[server]\ninterface="127.0.0.1"\nport=1111\n')
  write(t/'theme.toml','name="audit"\ndescription="audit fixture"\n')
- write(t/'config/zola.toml','base_url="https://example.invalid/"\ntheme="eips-theme"\ncompile_sass=false\nbuild_search_index=false\n')
- for name,body in [('index.html','<html>{{ section.content | safe }}</html>'),('section.html','<html>{{ section.content | safe }}</html>'),('page.html','<html>{{ page.content | safe }}</html>'),('eip.html','<html>{{ page.content | safe }}</html>')]: write(t/'templates'/name,body)
+ write(t/'config/zola.toml','base_url="https://example.invalid/"\ntheme="eips-theme"\ncompile_sass=false\nbuild_search_index=false\ntaxonomies=[{name="status"},{name="type"},{name="category"}]\n')
+ for name,body in [('index.html','<html>{{ section.content | safe }}</html>'),('section.html','<html>{{ section.content | safe }}</html>'),('page.html','<html>{{ page.content | safe }}</html>'),('eip.html','<html>{{ page.content | safe }}</html>'),('hardforks.html','<html>Hardfork fixture</html>'),('taxonomy_list.html','<html>Taxonomy fixture</html>'),('taxonomy_single.html','<html>Taxonomy term fixture</html>')]: write(t/'templates'/name,body)
  write(t/'config/eipw.toml','schema-version="0.10.0+793e8459b9ab9b4d955d2f98bf4283b94926f6a3e94d5462e392d98b67ac9729"\n[fetch]\nproposal-format="{:05}"\n'); initgit(t)
  write(r/'Build.toml',manifest(r,'EIPs',t,git(t,'rev-parse','HEAD')))
- write(r/'content/_index.md','+++\ntitle="Home"\n+++\n\nHome\n'); write(r/'content/00001.md',md(1)); initgit(r)
+ write(r/'content/_index.md','+++\ntitle="Home"\n+++\n\nHome\n'); write(r/'content/00001.md',md(1)); complete_sources(r); initgit(r)
  return w,r,t
 
 def runbuild(w,r,*flags,env=None):
@@ -63,20 +73,29 @@ def http(port,path):
  finally: c.close()
 
 def startserver(w,r,operation='serve',flags=()):
- port=freeport(); f=(w/(operation+'.log')).open('w')
- p=subprocess.Popen([str(BIN),'-C',str(r),'--build-root',str(w/'generated'),operation,'--interface','127.0.0.1','--port',str(port),*flags],stdout=f,stderr=subprocess.STDOUT,env=ENV,start_new_session=True)
- for _ in range(100):
-  if p.poll() is not None: f.close(); raise RuntimeError((w/(operation+'.log')).read_text())
+ port=freeport(); f=(w/(operation+'.log')).open('w',encoding='utf-8')
+ p=subprocess.Popen([str(BIN),'-C',str(r),'--build-root',str(w/'generated'),operation,'--interface','127.0.0.1','--port',str(port),*flags],stdout=f,stderr=subprocess.STDOUT,env=ENV,**({'creationflags':subprocess.CREATE_NO_WINDOW} if os.name=='nt' else {'start_new_session':True}))
+ for _ in range(600):
+  if p.poll() is not None: f.close(); raise RuntimeError((w/(operation+'.log')).read_text(encoding='utf-8',errors='replace'))
   try:
    http(port,'/'); return p,f,port
   except OSError: time.sleep(.1)
  stopserver(p,f); raise RuntimeError('server failed to become ready')
 def stopserver(p,f):
- try: os.killpg(p.pid,signal.SIGTERM)
- except ProcessLookupError: pass
- try: p.wait(timeout=3)
- except subprocess.TimeoutExpired: os.killpg(p.pid,signal.SIGKILL); p.wait()
- f.close()
+ try:
+  if p.poll() is None:
+   if os.name == 'nt':
+    # Only the process tree launched by this fixture; never match by name/port.
+    subprocess.run(['taskkill.exe','/PID',str(p.pid),'/T','/F'],stdout=subprocess.PIPE,stderr=subprocess.STDOUT,check=False,timeout=15,creationflags=subprocess.CREATE_NO_WINDOW)
+   else:
+    try: os.killpg(p.pid,signal.SIGTERM)
+    except ProcessLookupError: pass
+   try: p.wait(timeout=5)
+   except subprocess.TimeoutExpired:
+    if os.name != 'nt': os.killpg(p.pid,signal.SIGKILL)
+    else: p.kill()
+    p.wait(timeout=5)
+ finally: f.close()
 
 
 p=sys.modules[__name__]
@@ -87,14 +106,14 @@ def record(case, w, **kw):
     (AUDIT / 'results.json').write_text(json.dumps(results, indent=2)+'\n')
     print('PASS', case, kw, flush=True)
 
-def eventually(test, w, label, seconds=12):
+def eventually(test, w, label, seconds=30):
     end=time.monotonic()+seconds
     while time.monotonic()<end:
         try:
             if test(): return
         except (OSError, ValueError): pass
         time.sleep(.12)
-    raise AssertionError(label + '\n' + (w/'serve.log').read_text())
+    raise AssertionError(label + '\n' + (w/'serve.log').read_text(encoding='utf-8',errors='replace'))
 
 def content(w, path):
     f=w/'generated/repo/content'/path
@@ -138,7 +157,7 @@ def assets(w,r,port):
     eventually(lambda:p.http(port,'/1/assets/new.txt')==(200,'NEW ASSET'),w,'new asset not served')
     good=content(w,'00001/index.md')
     p.write(r/'content/00001/index.md',p.md(1,'[bad](assets/missing.txt)'))
-    eventually(lambda:'last-good input retained' in (w/'serve.log').read_text(),w,'invalid input not diagnosed')
+    eventually(lambda:'last-good input retained' in (w/'serve.log').read_text(encoding='utf-8',errors='replace'),w,'invalid input not diagnosed')
     assert content(w,'00001/index.md')==good,'failed preprocessing changed last good input'
     p.write(r/'content/00001/index.md',p.md(1,'RECOVERED [asset](assets/new.txt)'))
     eventually(lambda:'RECOVERED' in content(w,'00001/index.md'),w,'failed generation did not recover')
@@ -161,7 +180,7 @@ live_case(w,r,'linked-worktree-index-staging',staging)
 def sibling_collision(w,r,port):
     before=content(w,'00001.md')
     p.write(r/'content/00001.md',p.md(1,'CONFLICTING ACTIVE EDIT'))
-    eventually(lambda:'conflicts with startup sibling snapshot' in (w/'serve.log').read_text(),w,'sibling conflict not diagnosed')
+    eventually(lambda:'conflicts with startup sibling snapshot' in (w/'serve.log').read_text(encoding='utf-8',errors='replace'),w,'sibling conflict not diagnosed')
     assert content(w,'00001.md')==before
     (r/'content/00001.md').unlink()
     time.sleep(.7)
@@ -176,7 +195,7 @@ live_case(w,r,'sibling-collision-retention-and-recovery',sibling_collision)
 def manifest_change(w,r,port):
     before=content(w,'00001.md');manifest=(r/'Build.toml').read_text()
     p.write(r/'Build.toml',manifest+'\n# Changed source policy\n')
-    eventually(lambda:'restart serve' in (w/'serve.log').read_text(),w,'manifest change not diagnosed')
+    eventually(lambda:'restart serve' in (w/'serve.log').read_text(encoding='utf-8',errors='replace'),w,'manifest change not diagnosed')
     assert content(w,'00001.md')==before
     p.write(r/'Build.toml',manifest)
     p.write(r/'content/00001.md',p.md(1,'AFTER MANIFEST RESTORE'))

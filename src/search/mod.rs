@@ -41,19 +41,10 @@ impl Default for SearchConfig {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SearchCorpusConfig {
     pub(crate) enabled: bool,
     pub(crate) format: SearchCorpusFormat,
-}
-
-impl Default for SearchCorpusConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            format: SearchCorpusFormat::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -103,7 +103,7 @@ fn corpus_extracts_rendered_documents_chunks_and_pagefind_hooks() {
     assert_eq!(summary.documents, 1);
     assert_eq!(summary.chunks, 3);
     let output_file = output.join(SITE_CORPUS_PATH);
-    assert_eq!(summary.output_path, output_file);
+    assert_eq!(summary.output_path, output_file.canonicalize().unwrap());
     let raw = std::fs::read_to_string(&output_file).unwrap();
     assert!(raw.ends_with('\n'));
     assert!(!raw.contains("\n  "));
@@ -407,7 +407,7 @@ fn corpus_formats_use_fixed_path_and_disabled_mode_never_deletes_content() {
         write_file(&output, "1/index.html", r#"<main data-pagefind-body><span data-pagefind-meta="proposal:EIP-1"></span><h2 id="a">A</h2><p>Text.</p></main>"#);
         write_file(&output, "search-corpus.json", "authored historical filename");
         let summary = reconcile_corpus(request(output.clone(), true, format)).unwrap().unwrap();
-        assert_eq!(summary.output_path, output.join(SITE_CORPUS_PATH));
+        assert_eq!(summary.output_path, output.join(SITE_CORPUS_PATH).canonicalize().unwrap());
         assert_eq!(summary.documents, usize::from(format != SearchCorpusFormat::Chunks));
         assert_eq!(summary.chunks, usize::from(format != SearchCorpusFormat::Documents));
         let bytes = std::fs::read(output.join(SITE_CORPUS_PATH)).unwrap();

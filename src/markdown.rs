@@ -192,7 +192,7 @@ struct FrontMatter {
     path: String,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    aliases: Vec<PathBuf>,
+    aliases: Vec<String>,
 
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     authors: Vec<String>,
@@ -1018,12 +1018,23 @@ fn path_to_at(root: &Path, parent: &Path, input: &str) -> Result<String, Whateve
         parent.join(Path::new(input))
     };
 
-    let cchild = canonicalize_md(&child)?;
-    let relative = cchild.strip_prefix(&croot).expect("child not in root");
-    Ok(format!("@/{}", relative.to_str().unwrap()))
+    let cchild = canonicalize_md(root, &child)?;
+    let relative = cchild.strip_prefix(&croot)
+        .whatever_context("Markdown target is outside content root")?;
+    Ok(format!("@/{}", crate::site_path::relative(relative)?))
 }
 
-fn canonicalize_md(path: &Path) -> Result<PathBuf, Whatever> {
+fn canonicalize_md(root: &Path, path: &Path) -> Result<PathBuf, Whatever> {
+    let canonical = canonicalize_md_path(path)?;
+    let content = root.canonicalize().whatever_context("unable to resolve Markdown content root")?;
+    if canonical.starts_with(&content) { return Ok(canonical); }
+    #[cfg(windows)]
+    { crate::git_link::content_alias(&content, &canonical) }
+    #[cfg(not(windows))]
+    { snafu::whatever!("Markdown target `{}` is outside content root", path.display()) }
+}
+
+fn canonicalize_md_path(path: &Path) -> Result<PathBuf, Whatever> {
     let first_error = match std::fs::canonicalize(path) {
         Ok(canon) => return Ok(canon),
         Err(e) => e,
@@ -1281,7 +1292,7 @@ fn fix_links<'a, 'b>(
                 *dest_url = CowStr::from(external_url);
                 return Ok(e);
             }
-            let canonicalized = canonicalize_md(&child)?;
+            let canonicalized = canonicalize_md(root, &child)?;
             if let Some(public_url) =
                 only_plan.and_then(|plan| plan.external_url_for_canonical_target(&canonicalized))
             {
@@ -1519,26 +1530,23 @@ fn process_assets(
         let relative_path = path.strip_prefix(&assets_dir).unwrap();
         let relative_path = relative_path.with_file_name(relative_path.file_stem().unwrap());
 
-        let alias_bases = [
-            PathBuf::from(format!("/assets/eip-{number}/")),
-            PathBuf::from(format!("/assets/erc-{number}/")),
-        ];
+        let alias_bases = [format!("/assets/eip-{number}/"), format!("/assets/erc-{number}/")];
 
         let mut aliases = Vec::with_capacity(alias_bases.len());
 
         for alias_base in &alias_bases {
-            aliases.push(alias_base.join(&relative_path));
+            aliases.push(format!("{alias_base}{}", crate::site_path::relative(&relative_path)?));
         }
 
         if relative_path.ends_with("README") || relative_path.ends_with("index") {
             let index_path = relative_path.parent().unwrap();
             for alias_base in &alias_bases {
-                aliases.push(alias_base.join(index_path));
+                aliases.push(format!("{alias_base}{}", crate::site_path::relative(index_path)?));
             }
         }
 
         let front_matter = FrontMatter {
-            path: format!("{number}/assets/{}", relative_path.to_str().unwrap()),
+            path: format!("{number}/assets/{}", crate::site_path::relative(&relative_path)?),
             aliases,
             ..Default::default()
         };
@@ -1576,7 +1584,7 @@ fn process_eip(
         return Ok(());
     }
 
-    let (preamble, body) = Preamble::split(&contents)
+    let (preamble, body) = crate::source_text::split_preamble(&contents)
         .with_whatever_context(|_| format!("couldn't split preamble for `{}`", path_lossy))?;
 
     let body = transform_markdown(root, path, body, only_plan)
@@ -1669,15 +1677,15 @@ fn process_eip(
                         Some("index") => alias_path.parent().unwrap().file_name().unwrap(),
                         _ => file_stem,
                     };
-                    front_matter.aliases.push(root.into());
+                    front_matter.aliases.push(root.to_str().whatever_context("proposal alias must be UTF-8")?.to_owned());
                 }
 
                 front_matter
                     .aliases
-                    .push(format!("ERCS/erc-{number}").into());
+                    .push(format!("ERCS/erc-{number}"));
                 front_matter
                     .aliases
-                    .push(format!("EIPS/eip-{number}").into());
+                    .push(format!("EIPS/eip-{number}"));
             }
             "author" => {
                 let authors = extract_authors(value)?;

@@ -384,7 +384,7 @@ impl Default for SearchSettings {
 }
 
 /// Workspace-local rendered search corpus settings.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SearchCorpusSettings {
     /// Whether `build-eips build` writes the rendered search corpus artifact.
@@ -393,15 +393,6 @@ pub struct SearchCorpusSettings {
     /// Which corpus views to emit.
     pub format: SearchCorpusFormat,
 
-}
-
-impl Default for SearchCorpusSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            format: SearchCorpusFormat::default(),
-        }
-    }
 }
 
 /// Rendered search corpus output format.
@@ -801,7 +792,7 @@ mod workspace_tests {
 
         let config = LoadedWorkspaceConfig::from_path(&config_path).unwrap();
 
-        assert_eq!(config.workspace_root(), workspace.root());
+        assert_eq!(config.workspace_root(), workspace.root().canonicalize().unwrap());
         assert_eq!(config.server_settings(), &ServerSettings::default());
         assert_eq!(
             config.site_settings().base_url.as_ref().unwrap().as_str(),
@@ -1183,13 +1174,13 @@ repository = "https://github.com/eips-wg/theme.git"
         let config_path = workspace.write_file(LOCAL_CONFIG_FILE, &default_workspace_config_text());
         let nested = workspace.create_dir("EIPs/content");
 
-        assert_eq!(discover_path(&nested).unwrap(), config_path);
+        assert_eq!(discover_path(&nested).unwrap().canonicalize().unwrap(), config_path.canonicalize().unwrap());
         assert_eq!(
             LoadedWorkspaceConfig::discover(&nested)
                 .unwrap()
                 .unwrap()
                 .config_path(),
-            config_path
+            config_path.canonicalize().unwrap()
         );
     }
 

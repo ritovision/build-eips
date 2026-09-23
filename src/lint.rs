@@ -303,7 +303,8 @@ pub async fn eipw(
     });
     let reporter = Count::new(reporter);
 
-    let mut linter = Linter::with_options(reporter, config.eipw);
+    let mut linter = Linter::with_options(reporter, config.eipw)
+        .set_fetch(crate::source_text::LintFetch);
 
     if opts.no_default_lints {
         linter = linter.clear_lints();

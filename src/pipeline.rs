@@ -122,10 +122,6 @@ pub(crate) struct Prepared {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SearchIndexMode {
     Build,
-    #[cfg(test)]
-    Check,
-    #[cfg(test)]
-    Serve,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -428,9 +424,7 @@ mod tests {
         proposal_catalog::collect_proposal_catalog,
     };
 
-    use super::{
-        prepare_runtime_derived_data, prepare_runtime_source, prepare_theme_for_zola, Prepared,
-    };
+    use super::{prepare_runtime_derived_data, prepare_runtime_source, prepare_theme_for_zola};
 
     struct RuntimeWorkspace {
         _temp: TempDir,
@@ -747,7 +741,7 @@ mod tests {
             prepare_resolved_source(&resolved).unwrap();
 
             assert_eq!(
-                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap(),
+                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
                 ACTIVE_PROPOSAL
             );
         }
@@ -765,11 +759,11 @@ mod tests {
         prepare_resolved_source(&resolved).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap(),
+            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
             ACTIVE_PROPOSAL
         );
         assert_eq!(
-            std::fs::read_to_string(prepared_path(&resolved, "content/00002.md")).unwrap(),
+            std::fs::read_to_string(prepared_path(&resolved, "content/00002.md")).unwrap().replace("\r\n", "\n"),
             "sibling\n"
         );
     }
@@ -791,7 +785,7 @@ mod tests {
             prepare_resolved_source(&resolved).unwrap();
 
             assert_eq!(
-                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap(),
+                std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
                 ACTIVE_PROPOSAL
             );
         }
@@ -840,7 +834,7 @@ mod tests {
         prepare_resolved_source(&resolved).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap(),
+            std::fs::read_to_string(prepared_path(&resolved, "content/00001.md")).unwrap().replace("\r\n", "\n"),
             ACTIVE_PROPOSAL
         );
     }

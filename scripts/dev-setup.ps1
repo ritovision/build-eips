@@ -460,6 +460,9 @@ if (-not (Test-Path -LiteralPath $BuildEipsPath -PathType Leaf)) {
     Die "local build-eips was not built at $BuildEipsPath"
 }
 
+$TargetDebugDir = Split-Path -Path $BuildEipsPath -Parent
+Move-DirectoryToFrontOfSessionPath -InstallDir $TargetDebugDir
+
 $ZolaPath = Initialize-Zola
 
 Say "Bootstrapping local contributor workspace"
@@ -497,8 +500,6 @@ if ($PathNotes.Count -gt 0) {
     }
     Say "To make this permanent, add the listed directory or directories to your user Path in Windows Environment Variables."
 }
-
-$TargetDebugDir = Split-Path -Path $BuildEipsPath -Parent
 
 Say ""
 Say "Next commands:"

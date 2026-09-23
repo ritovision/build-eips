@@ -1321,7 +1321,7 @@ base-url = "https://example.test/{sibling_id}/"
                     .join(config::DEFAULT_THEME_DIR)
                     .join("PINNED.md")
             )
-            .unwrap(),
+            .unwrap().replace("\r\n", "\n"),
             "pinned theme commit\n"
         );
     }
@@ -1483,7 +1483,7 @@ base-url = "https://example.test/{sibling_id}/"
         run_workspace_init(&active_path, &workspace_root, &repositories).unwrap();
 
         assert_eq!(
-            std::fs::read_to_string(workspace_root.join("ERCs/content/00002.md")).unwrap(),
+            std::fs::read_to_string(workspace_root.join("ERCs/content/00002.md")).unwrap().replace("\r\n", "\n"),
             "remote sibling\n"
         );
     }
@@ -1593,7 +1593,7 @@ base-url = "https://example.test/{sibling_id}/"
                 .unwrap();
         assert_eq!(
             workspace_config.workspace_build_root("Managed"),
-            workspace_root
+            workspace_root.canonicalize().unwrap()
                 .join(config::DEFAULT_BUILD_ROOT_BASE)
                 .join("Managed")
         );

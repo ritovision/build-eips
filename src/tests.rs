@@ -1,5 +1,3 @@
-#![cfg(test)]
-
 // Cross-domain behavior tests live here; see src/README.md for module test ownership.
 
 use std::{
@@ -182,7 +180,7 @@ fn execution_commands_discover_workspace_config_from_active_repo_root() {
 
     assert_eq!(
         resolved.build_path,
-        workspace_root
+        workspace_root.canonicalize().unwrap()
             .join(config::DEFAULT_BUILD_ROOT_BASE)
             .join("Core")
     );
@@ -288,7 +286,7 @@ fn non_workspace_runtime_path_falls_back_to_active_repo_build_dir() {
 
     let resolved = resolve_execution(&args).unwrap();
 
-    assert_eq!(resolved.build_path, active_path.join(BUILD_DIR));
+    assert_eq!(resolved.build_path, active_path.canonicalize().unwrap().join(BUILD_DIR));
 }
 
 #[test]
@@ -360,7 +358,7 @@ fn workspace_local_sources_resolve_from_standard_layout() {
 
     assert_eq!(
         resolved.theme_path.as_deref(),
-        Some(workspace.path().join(config::DEFAULT_THEME_DIR).as_path())
+        Some(workspace.path().join(config::DEFAULT_THEME_DIR).canonicalize().unwrap().as_path())
     );
     assert_eq!(
         resolved.repository_use.other_repos["EIPs"],

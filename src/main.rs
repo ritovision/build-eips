@@ -17,6 +17,8 @@ mod generated_fs;
 mod generated_git;
 mod generation;
 mod git;
+#[cfg(any(windows, test))]
+mod git_link;
 mod github;
 mod layout;
 mod lint;
@@ -38,6 +40,8 @@ mod reserved;
 mod search;
 mod serve;
 mod source_reads;
+mod source_text;
+mod site_path;
 mod theme_live;
 mod tree_sync;
 mod workspace;
