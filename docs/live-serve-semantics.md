@@ -66,10 +66,13 @@ theme config. It does not edit the source theme or rely on mtime-only touching,
 which Zola 0.22.1 ignores. Publication finishes before that request. Repeated
 source events that describe the same accepted raw generation produce no writes
 or repeated render requests. Filesystem events are coalesced by the existing
-watcher before a candidate is computed. Pure non-Markdown bundle-asset writes
-already cause Zola to render globally, so an asset-only add/rename does not add
-a redundant explicit trigger. Structural deletion still requests a render when
-there is no native content write to make the renderer observe it.
+watcher before a candidate is computed. Pure non-Markdown bundle-asset writes already cause Zola to render globally,
+so an asset-only add/rename does not add a redundant explicit trigger. Before
+publication, removed or renamed static bundle-asset routes are invalidated from
+the disposable serve output; deleting a proposal page invalidates that proposal's
+copied asset directory so Zola cannot continue serving stale bytes. Structural
+deletion still requests a render when there is no native content write to make
+the renderer observe it.
 
 ## Failure and recovery boundaries
 

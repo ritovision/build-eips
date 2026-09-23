@@ -706,6 +706,18 @@ fn proposal_asset_dir_prefix(content_relative_path: &Path) -> Option<ProposalNum
     path_component_proposal_number(Some(proposal_component.as_os_str()))
 }
 
+pub(crate) fn static_proposal_asset_output_path(content_relative_path: &Path) -> Option<PathBuf> {
+    let (proposal_number, asset_relative_path) = proposal_asset_parts(content_relative_path)?;
+    if ProposalAssetKind::from_path(&asset_relative_path) != ProposalAssetKind::Static {
+        return None;
+    }
+    Some(
+        PathBuf::from(proposal_number.to_string())
+            .join("assets")
+            .join(asset_relative_path),
+    )
+}
+
 fn proposal_asset_parts(content_relative_path: &Path) -> Option<(ProposalNumber, PathBuf)> {
     let mut components = content_relative_path.components();
     let proposal_component = components.next()?;

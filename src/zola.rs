@@ -5,7 +5,7 @@
  */
 
 use std::{
-    collections::VecDeque,
+    collections::{BTreeSet, VecDeque},
     ffi::{OsStr, OsString},
     io::{BufRead, BufReader, ErrorKind},
     path::{Path, PathBuf},
@@ -138,7 +138,7 @@ fn validate_version_output(text: &str) -> Result<Version, Error> {
 pub(crate) fn prepare_static_output(
     source: &Path,
     output: &Path,
-    paths: &std::collections::BTreeSet<std::path::PathBuf>,
+    paths: &BTreeSet<PathBuf>,
 ) -> std::io::Result<bool> {
     let paths = paths
         .iter()
@@ -151,6 +151,44 @@ pub(crate) fn prepare_static_output(
         plan.prepare_destination(output)?;
     }
     Ok(plan.shape_changed)
+}
+
+pub(crate) fn bundle_asset_output_removals(
+    source: &Path,
+    paths: &BTreeSet<PathBuf>,
+) -> std::io::Result<BTreeSet<PathBuf>> {
+    let mut removals = BTreeSet::new();
+    for path in paths {
+        let Ok(content_relative) = path.strip_prefix("content") else {
+            continue;
+        };
+        let source_absent = crate::tree_sync::inspect(source, path)?.is_none();
+        if !source_absent {
+            continue;
+        }
+        if let Some(output_path) =
+            crate::markdown::static_proposal_asset_output_path(content_relative)
+        {
+            removals.insert(output_path);
+            continue;
+        }
+        if let Some(number) =
+            crate::proposal::proposal_number_from_content_markdown_path(content_relative)
+        {
+            // If a proposal page disappears (including a flat<->bundle shape
+            // transition), discard copied bundle assets. A subsequent render
+            // repopulates any assets that still belong to the accepted page.
+            removals.insert(PathBuf::from(number.to_string()).join("assets"));
+        }
+    }
+    Ok(removals)
+}
+
+pub(crate) fn prepare_bundle_asset_output(
+    output: &Path,
+    removals: &BTreeSet<PathBuf>,
+) -> std::io::Result<bool> {
+    crate::tree_sync::Plan::remove_paths(output, removals)
 }
 
 pub(crate) fn request_full_rebuild(project: &Path) -> std::io::Result<()> {
@@ -646,5 +684,74 @@ mod live_render_request_regressions {
             second.matches("# build-eips live render request:").count(),
             1
         );
+    }
+}
+
+#[cfg(test)]
+mod bundle_asset_output_regressions {
+    use super::*;
+    use std::fs;
+
+    fn write(root: &Path, relative: &str, body: &str) {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn removed_bundle_asset_is_invalidated_without_touching_current_asset() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let output = temp.path().join("output");
+        write(&source, "content/00001/index.md", "---\neip: 1\n---\n");
+        write(&source, "content/00001/assets/renamed.txt", "new");
+        write(&output, "1/assets/new.txt", "stale");
+        write(&output, "1/assets/renamed.txt", "current");
+        let changed = BTreeSet::from([
+            PathBuf::from("content/00001/assets/new.txt"),
+            PathBuf::from("content/00001/assets/renamed.txt"),
+        ]);
+        let removals = bundle_asset_output_removals(&source, &changed).unwrap();
+        assert_eq!(
+            removals,
+            BTreeSet::from([PathBuf::from("1/assets/new.txt")])
+        );
+        assert!(prepare_bundle_asset_output(&output, &removals).unwrap());
+        assert!(!output.join("1/assets/new.txt").exists());
+        assert_eq!(
+            fs::read_to_string(output.join("1/assets/renamed.txt")).unwrap(),
+            "current"
+        );
+    }
+
+    #[test]
+    fn removed_proposal_page_invalidates_its_copied_bundle_asset_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let output = temp.path().join("output");
+        // The tracked raw asset can remain after the selected proposal page is
+        // deleted; without the page it is no longer part of the rendered bundle.
+        write(&source, "content/00001/assets/renamed.txt", "raw orphan");
+        write(&output, "1/assets/renamed.txt", "stale output");
+        let changed = BTreeSet::from([PathBuf::from("content/00001/index.md")]);
+        let removals = bundle_asset_output_removals(&source, &changed).unwrap();
+        assert_eq!(removals, BTreeSet::from([PathBuf::from("1/assets")]));
+        assert!(prepare_bundle_asset_output(&output, &removals).unwrap());
+        assert!(!output.join("1/assets").exists());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn asset_cleanup_never_follows_an_output_link_ancestor() {
+        use std::os::unix::fs::symlink;
+        let temp = tempfile::tempdir().unwrap();
+        let output = temp.path().join("output");
+        let outside = temp.path().join("outside");
+        write(&outside, "new.txt", "keep");
+        fs::create_dir_all(output.join("1")).unwrap();
+        symlink(&outside, output.join("1/assets")).unwrap();
+        let removals = BTreeSet::from([PathBuf::from("1/assets/new.txt")]);
+        assert!(prepare_bundle_asset_output(&output, &removals).is_err());
+        assert_eq!(fs::read_to_string(outside.join("new.txt")).unwrap(), "keep");
     }
 }

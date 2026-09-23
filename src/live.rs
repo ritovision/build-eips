@@ -586,14 +586,25 @@ impl LiveSource {
                 .whatever_context("unable to compare publication; retry pending")?;
         let output = crate::layout::serve_output_path(self.live.parent().unwrap());
         let retry_render = self.render_pending;
+        let bundle_output_removals =
+            crate::zola::bundle_asset_output_removals(&self.stage, &changed_publication)
+                .whatever_context(
+                    "unable to plan stale bundle-asset output invalidation; retry pending",
+                )?;
         // Output normalization itself can be partially destructive before it
-        // reports failure. Reserve repair intent BEFORE entering that boundary.
+        // reports failure. Reserve repair intent BEFORE entering either boundary.
         self.render_pending |= changed_publication
             .iter()
-            .any(|path| path.starts_with("static"));
+            .any(|path| path.starts_with("static"))
+            || !bundle_output_removals.is_empty();
         let static_refresh =
             crate::zola::prepare_static_output(&self.stage, &output, &changed_publication)
                 .whatever_context("unable to invalidate stale static output; retry pending")?;
+        let bundle_refresh =
+            crate::zola::prepare_bundle_asset_output(&output, &bundle_output_removals)
+                .whatever_context(
+                    "unable to invalidate stale bundle-asset output; retry pending",
+                )?;
         // Zola already performs a full render when a non-Markdown content
         // asset is written. An asset-only add/rename needs no second trigger.
         // Deletions can be ignored by its watcher, so retain explicit escalation
@@ -603,7 +614,7 @@ impl LiveSource {
                 && path.extension().is_none_or(|extension| extension != "md")
                 && self.stage.join(path).is_file()
         });
-        let explicit_refresh = global_semantics_changed || static_refresh;
+        let explicit_refresh = global_semantics_changed || static_refresh || bundle_refresh;
         // Keep the native render intent until ALL publication succeeds. If an
         // asset was installed before a later file failed, source reversion or
         // retry must still request a render of the repaired complete input.

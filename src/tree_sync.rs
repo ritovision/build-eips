@@ -147,6 +147,30 @@ impl Plan {
             .any(|ancestor| ancestor != path && path.starts_with(ancestor))
     }
 
+    pub(crate) fn remove_paths(destination: &Path, paths: &BTreeSet<PathBuf>) -> io::Result<bool> {
+        let mut removals = BTreeSet::new();
+        for path in paths {
+            if removals
+                .iter()
+                .any(|ancestor: &PathBuf| path.starts_with(ancestor))
+            {
+                continue;
+            }
+            if inspect(destination, path)?.is_some() {
+                removals.insert(path.clone());
+            }
+        }
+        let changed = !removals.is_empty();
+        Self {
+            removals,
+            directories: BTreeSet::new(),
+            files: BTreeSet::new(),
+            shape_changed: changed,
+        }
+        .prepare_destination(destination)?;
+        Ok(changed)
+    }
+
     pub(crate) fn prepare_destination(&self, destination: &Path) -> io::Result<()> {
         self.prepare_destination_inner(destination, false)
     }
