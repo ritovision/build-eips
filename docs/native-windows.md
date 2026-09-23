@@ -22,6 +22,8 @@ build-eips -C C:\work\EIPs --build-root C:\builds\eips build
 
 Keep the build root outside the authored source directories. A shorter path is an explicit environment workaround, not a replacement for failed platform acceptance.
 
+Private live-generation clones also enable `core.longpaths` before fetch and checkout, without changing source Git configuration. However, libgit2 can still reject sufficiently deep repository-metadata paths during clone initialization. This is distinct from checking out an asset whose complete filename exceeds 260 characters. The serve error preserves the underlying Git path and recommends a shorter `--build-root`. When the metadata-root limit is reached, shorten that root and rerun the complete watcher checks; do not disable watcher assertions or change global Git/registry settings. Arbitrarily deep generated Git metadata paths are not part of the supported Windows envelope.
+
 ### Source-checkout depth limitation
 
 The internal-checkout long-path setting does not change authored repositories. On Git for Windows configurations where source-repository long-path support is disabled, a deeply nested source checkout can exceed libgit2's status-path limit before a build begins. The preprocessor retains the underlying Git path error and explains that the **source checkout itself** must move to a shorter directory. Changing only `--build-root` cannot repair an overlong source path.
