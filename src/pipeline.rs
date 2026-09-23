@@ -968,7 +968,7 @@ mod tests {
                 .unwrap();
         assert!(hardfork_index.contains("Glamsterdam"));
         assert!(hardfork_index.contains("https://eips.ethereum.org/EIPS/eip-7773"));
-        assert!(hardfork_index.contains("url = \"/2/\""));
+        assert!(hardfork_index.contains("local_route = \"/2/\""));
         assert!(
             std::fs::read_to_string(prepared_path(&resolved, "content/00002.md"))
                 .unwrap()

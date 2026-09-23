@@ -141,10 +141,12 @@ fn network_upgrade_membership_value(membership: &NetworkUpgradeMembership) -> Va
         "meta_eip".to_owned(),
         Value::Integer(i64::from(membership.source_meta_eip.get())),
     );
-    table.insert(
-        "meta_url".to_owned(),
-        Value::String(membership.meta_url.clone()),
-    );
+    let mut destination = toml::Table::new();
+    if let Some(route) = &membership.meta.local_route {
+        destination.insert("local_route".to_owned(), Value::String(route.clone()));
+    }
+    destination.insert("public_url".to_owned(), Value::String(membership.meta.public_url.clone()));
+    table.insert("meta".to_owned(), Value::Table(destination));
     table.insert(
         "stage_key".to_owned(),
         Value::String(membership.stage_key.clone()),
@@ -1782,7 +1784,9 @@ mod tests {
             display_name: display_name.to_owned(),
             slug: display_name.to_ascii_lowercase(),
             source_meta_eip: number(source_meta_eip),
-            meta_url: format!("/{source_meta_eip}/"),
+            meta: crate::proposal::ProposalDestination::new(
+                number(source_meta_eip), crate::proposal::ProposalPublicSite::Eips, true,
+            ),
             stage_key: stage_key.to_owned(),
             stage_label: stage_label.to_owned(),
             subgroup: subgroup.map(str::to_owned),
@@ -2284,7 +2288,7 @@ mod tests {
         assert_eq!(memberships[0]["display_name"].as_str().unwrap(), "Dencun");
         assert_eq!(memberships[0]["slug"].as_str().unwrap(), "dencun");
         assert_eq!(memberships[0]["meta_eip"].as_integer().unwrap(), 7569);
-        assert_eq!(memberships[0]["meta_url"].as_str().unwrap(), "/7569/");
+        assert_eq!(memberships[0]["meta"]["local_route"].as_str().unwrap(), "/7569/");
         assert_eq!(memberships[0]["stage_key"].as_str().unwrap(), "included");
         assert_eq!(memberships[0]["stage_label"].as_str().unwrap(), "Included");
         assert_eq!(memberships[0]["subgroup"].as_str().unwrap(), "Core EIPs");
@@ -2355,7 +2359,7 @@ mod tests {
         preprocess(&content, Some(&plan)).unwrap();
 
         let body = rendered_body(&content.join("00555.md"));
-        assert!(body.contains("(https://eips.ethereum.org/678/assets/foo.pdf)"));
+        assert!(body.contains("(https://eips.ethereum.org/assets/eip-678/foo.pdf)"));
     }
 
     #[test]
@@ -2376,7 +2380,7 @@ mod tests {
         preprocess(&content, Some(&plan)).unwrap();
 
         let body = rendered_body(&content.join("00555.md"));
-        assert!(body.contains("(https://eips.ethereum.org/678/assets/guide/)"));
+        assert!(body.contains("(https://eips.ethereum.org/assets/eip-678/guide.html)"));
     }
 
     #[test]
@@ -2403,8 +2407,37 @@ mod tests {
         preprocess(&content, Some(&plan)).unwrap();
 
         let body = rendered_body(&content.join("00555.md"));
-        assert!(body.contains("(https://eips.ethereum.org/678/assets/README/)"));
-        assert!(body.contains("(https://eips.ethereum.org/678/assets/index/)"));
+        assert!(body.contains("(https://eips.ethereum.org/assets/eip-678/)"));
+        assert!(body.contains("(https://eips.ethereum.org/assets/eip-678/)"));
+    }
+
+    #[test]
+    fn targeted_public_asset_policy_preserves_encoded_paths_queries_and_fragments() {
+        for (category, host, prefix) in [
+            (None, "eips", "eip"),
+            (Some("ERC"), "ercs", "erc"),
+        ] {
+            let (_temp, content) = content_repo(&[
+                ("00555.md", proposal_markdown(555, None, "",
+                    "[image](./00678/assets/nested/caf%C3%A9%20100%25.svg?x=a%26b#part%202)\n[guide](./00678/assets/guide.md?download=1#example)\n[readme](./00678/assets/nested/README.md?q=1#title)\n[index](./00678/assets/index.md?q=2#title)")),
+                ("00678/index.md", proposal_markdown(678, category, "", "Target.")),
+                ("00678/assets/nested/café 100%.svg", "image".to_owned()),
+                ("00678/assets/guide.md", "Guide.".to_owned()),
+                ("00678/assets/nested/README.md", "Readme.".to_owned()),
+                ("00678/assets/index.md", "Index.".to_owned()),
+            ]);
+            let plan = only_plan(&content, &[555]);
+            preprocess(&content, Some(&plan)).unwrap();
+            let body = rendered_body(&content.join("00555.md"));
+            for suffix in [
+                "nested/caf%C3%A9%20100%25.svg?x=a%26b#part%202",
+                "guide.html?download=1#example",
+                "nested/?q=1#title", "?q=2#title",
+            ] {
+                assert!(body.contains(&format!("https://{host}.ethereum.org/assets/{prefix}-678/{suffix}")), "{body}");
+            }
+            assert!(!body.contains("%2525"));
+        }
     }
 
     #[test]
@@ -2426,7 +2459,7 @@ mod tests {
 
         let body = rendered_body(&content.join("00555.md"));
         assert!(body.contains("(../678/assets/foo.pdf)"));
-        assert!(!body.contains("https://eips.ethereum.org/678/assets/foo.pdf"));
+        assert!(!body.contains("https://eips.ethereum.org/assets/eip-678/foo.pdf"));
     }
 
     #[test]
@@ -2448,7 +2481,7 @@ mod tests {
         preprocess(&content, Some(&plan)).unwrap();
 
         let body = rendered_body(&content.join("00555.md"));
-        assert!(body.contains("(https://eips.ethereum.org/678/assets/foo.pdf)"));
+        assert!(body.contains("(https://eips.ethereum.org/assets/eip-678/foo.pdf)"));
     }
 
     #[test]
@@ -2839,7 +2872,7 @@ See [EIP-678](/00678.md).
     }
 
     #[test]
-    fn preprocess_proposal_id_matches_catalog_search_view() {
+    fn preprocess_proposal_id_matches_canonical_catalog() {
         let (_temp, content) = content_repo(&[
             (
                 "01559.md",
@@ -2861,7 +2894,7 @@ See [EIP-678](/00678.md).
             ),
         ]);
         let catalog = collect_proposal_catalog(&content, None).unwrap();
-        let search_records = catalog.search_metadata_records();
+        let records = catalog.records();
 
         preprocess(&content, None).unwrap();
 
@@ -2869,11 +2902,11 @@ See [EIP-678](/00678.md).
         let erc_front_matter = rendered_front_matter(&content.join("00020.md"));
         assert_eq!(
             eip_front_matter["extra"]["proposal_id"].as_str().unwrap(),
-            search_records["eip-1559"].proposal_id
+            format!("{}-{}", records["eip-1559"].prefix, records["eip-1559"].number)
         );
         assert_eq!(
             erc_front_matter["extra"]["proposal_id"].as_str().unwrap(),
-            search_records["erc-20"].proposal_id
+            format!("{}-{}", records["erc-20"].prefix, records["erc-20"].number)
         );
     }
 

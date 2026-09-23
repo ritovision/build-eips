@@ -21,7 +21,7 @@ use crate::{
     markdown::{extract_authors, Author},
     proposal::{
         flat_proposal_number, path_component_proposal_number, public_site_for_preamble,
-        OnlyRenderPlan, ProposalNumber, ProposalPublicSite,
+        OnlyRenderPlan, ProposalDestination, ProposalNumber, ProposalPublicSite,
     },
 };
 
@@ -69,44 +69,21 @@ pub(crate) struct ProposalCatalogRecord {
     pub(crate) proposal_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) category: Option<String>,
-    pub(crate) url: String,
-}
-
-// Phase 3 exposes this view before Phase 4 consumes it from rendering hooks.
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct ProposalSearchAuthor {
-    pub(crate) name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) github: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) email: Option<String>,
-    pub(crate) display: String,
-}
-
-// Phase 3 exposes this view before Phase 4 consumes it from rendering hooks.
-#[allow(dead_code)]
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(crate) struct ProposalSearchMetadataRecord {
-    pub(crate) proposal_id: String,
-    pub(crate) number: ProposalNumber,
-    pub(crate) prefix: ProposalCatalogPrefix,
-    pub(crate) title: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) description: Option<String>,
-    pub(crate) status: String,
-    #[serde(rename = "type")]
-    pub(crate) proposal_type: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) category: Option<String>,
-    pub(crate) authors: Vec<ProposalSearchAuthor>,
-    pub(crate) author_filter_values: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // Only destination consumers (hardforks) receive these fields. Popovers do not.
+    #[serde(skip)]
+    pub(crate) destination: ProposalDestination,
+    #[allow(dead_code)]
+    #[serde(skip)]
+    pub(crate) authors: Vec<Author>,
+    #[allow(dead_code)]
+    #[serde(skip)]
     pub(crate) created: Option<Datetime>,
-    pub(crate) url: String,
+    #[allow(dead_code)]
+    #[serde(skip)]
+    relationships: ProposalCatalogRelationships,
 }
 
-// Relationship fields are collected internally for later search result/filter work.
+// Canonical parsed relationships are independent of any search projection.
 #[allow(dead_code)]
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct ProposalCatalogRelationships {
@@ -116,83 +93,9 @@ struct ProposalCatalogRelationships {
     discussions_to: Option<String>,
 }
 
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-struct ProposalCatalogEntry {
-    number: ProposalNumber,
-    prefix: ProposalCatalogPrefix,
-    title: String,
-    description: Option<String>,
-    status: String,
-    proposal_type: String,
-    category: Option<String>,
-    url: String,
-    authors: Vec<Author>,
-    created: Option<Datetime>,
-    relationships: ProposalCatalogRelationships,
-}
-
-impl ProposalCatalogEntry {
-    fn metadata_json_record(&self) -> ProposalCatalogRecord {
-        ProposalCatalogRecord {
-            number: self.number,
-            prefix: self.prefix,
-            title: self.title.clone(),
-            description: self.description.clone(),
-            status: self.status.clone(),
-            proposal_type: self.proposal_type.clone(),
-            category: self.category.clone(),
-            url: self.url.clone(),
-        }
-    }
-
-    fn search_metadata_record(&self) -> ProposalSearchMetadataRecord {
-        let authors = self.authors.iter().map(search_author).collect::<Vec<_>>();
-        let author_filter_values = self
-            .authors
-            .iter()
-            .map(|author| author.name.clone())
-            .collect::<Vec<_>>();
-
-        ProposalSearchMetadataRecord {
-            proposal_id: format!("{}-{}", self.prefix, self.number),
-            number: self.number,
-            prefix: self.prefix,
-            title: self.title.clone(),
-            description: self.description.clone(),
-            status: self.status.clone(),
-            proposal_type: self.proposal_type.clone(),
-            category: self.category.clone(),
-            authors,
-            author_filter_values,
-            created: self.created,
-            url: self.url.clone(),
-        }
-    }
-}
-
-fn search_author(author: &Author) -> ProposalSearchAuthor {
-    ProposalSearchAuthor {
-        name: author.name.clone(),
-        github: author.github.clone(),
-        email: author.email.clone(),
-        display: search_author_display(author),
-    }
-}
-
-fn search_author_display(author: &Author) -> String {
-    match (&author.github, &author.email) {
-        (Some(github), Some(email)) => format!("{} (@{}) <{}>", author.name, github, email),
-        (Some(github), None) => format!("{} (@{})", author.name, github),
-        (None, Some(email)) => format!("{} <{}>", author.name, email),
-        (None, None) => author.name.clone(),
-    }
-}
-
 #[derive(Debug, Clone)]
 pub(crate) struct ProposalCatalog {
     records: BTreeMap<String, ProposalCatalogRecord>,
-    search_entries: BTreeMap<String, ProposalCatalogEntry>,
     source_documents: BTreeMap<String, ProposalCatalogSourceDocument>,
 }
 
@@ -216,14 +119,6 @@ impl ProposalCatalog {
     #[allow(dead_code)]
     pub(crate) fn into_records(self) -> BTreeMap<String, ProposalCatalogRecord> {
         self.records
-    }
-
-    #[allow(dead_code)]
-    pub(crate) fn search_metadata_records(&self) -> BTreeMap<String, ProposalSearchMetadataRecord> {
-        self.search_entries
-            .iter()
-            .map(|(key, entry)| (key.clone(), entry.search_metadata_record()))
-            .collect()
     }
 }
 
@@ -278,7 +173,6 @@ struct CollectedProposalCatalogRecord {
     key: String,
     source_path: PathBuf,
     record: ProposalCatalogRecord,
-    search_entry: ProposalCatalogEntry,
     source_document: ProposalCatalogSourceDocument,
 }
 
@@ -385,19 +279,16 @@ pub(crate) fn collect_proposal_catalog(
     }
 
     let mut source_documents = BTreeMap::new();
-    let mut search_entries = BTreeMap::new();
     let records = records
         .into_iter()
         .map(|(key, metadata)| {
             source_documents.insert(key.clone(), metadata.source_document);
-            search_entries.insert(key.clone(), metadata.search_entry);
             (key, metadata.record)
         })
         .collect();
 
     Ok(ProposalCatalog {
         records,
-        search_entries,
         source_documents,
     })
 }
@@ -490,7 +381,7 @@ fn collect_proposal_catalog_from_contents(
         body: body.to_owned(),
     };
 
-    let search_entry = ProposalCatalogEntry {
+    let record = ProposalCatalogRecord {
         number: proposal_number,
         prefix,
         title: fields.title,
@@ -498,18 +389,20 @@ fn collect_proposal_catalog_from_contents(
         status: fields.status,
         proposal_type: fields.proposal_type,
         category: fields.category,
-        url: catalog_record_url(proposal_number, site, only_plan),
+        destination: ProposalDestination::new(
+            proposal_number,
+            site,
+            only_plan.is_none_or(|plan| plan.is_selected_number(proposal_number)),
+        ),
         authors: fields.authors,
         created: fields.created,
         relationships: fields.relationships,
     };
-    let record = search_entry.metadata_json_record();
 
     Ok(CollectedProposalCatalogRecord {
         key,
         source_path: markdown_path.to_path_buf(),
         record,
-        search_entry,
         source_document,
     })
 }
@@ -560,18 +453,6 @@ fn insert_collected_proposal_catalog_record(
 
     records.insert(metadata.key.clone(), metadata);
     Ok(())
-}
-
-fn catalog_record_url(
-    proposal_number: ProposalNumber,
-    site: ProposalPublicSite,
-    only_plan: Option<&OnlyRenderPlan>,
-) -> String {
-    if only_plan.is_some_and(|plan| !plan.is_selected_number(proposal_number)) {
-        site.proposal_url(proposal_number)
-    } else {
-        format!("/{}/", proposal_number.get())
-    }
 }
 
 fn required_catalog_field(
@@ -708,7 +589,6 @@ mod tests {
 
     use super::{
         collect_proposal_catalog, ProposalCatalogPrefix, ProposalCatalogRelationships,
-        ProposalSearchAuthor,
     };
     use crate::proposal::{OnlyRenderPlan, ProposalNumber};
 
@@ -780,7 +660,7 @@ mod tests {
         assert_eq!(records["eip-20"].number, number(20));
         assert_eq!(records["eip-20"].prefix, ProposalCatalogPrefix::Eip);
         assert_eq!(records["eip-20"].title, "Flat Proposal");
-        assert_eq!(records["eip-20"].url, "/20/");
+        assert_eq!(records["eip-20"].destination.local_route.as_deref(), Some("/20/"));
         assert_eq!(records["erc-21"].number, number(21));
         assert_eq!(records["erc-21"].prefix, ProposalCatalogPrefix::Erc);
         assert_eq!(records["erc-21"].description.as_deref(), Some("Desc"));
@@ -859,175 +739,46 @@ mod tests {
     }
 
     #[test]
-    fn proposal_catalog_search_metadata_view_exposes_phase_four_fields() {
+    fn proposal_catalog_retains_canonical_semantics_without_search_projection() {
         let temp = TempDir::new().unwrap();
-        write_file(
-            temp.path(),
-            "1559/index.md",
-            &catalog_proposal_markdown_with_extra(
-                1559,
-                "Fee Market Change",
-                Some("Core"),
-                Some("A transaction pricing mechanism."),
-                "author: Alice <alice@example.com>, Bob (@bob), Carol (@carol) <carol@example.com>, Dan\ncreated: 2021-04-13\nrequires: 1, 2\nreplaces: 3\nsuperseded-by: 4\ndiscussions-to: https://ethereum-magicians.org/t/eip-1559\n",
-            ),
-        );
-
+        write_file(temp.path(), "1559/index.md", &catalog_proposal_markdown_with_extra(
+            1559, "Fee Market Change", Some("Core"), Some("Description"),
+            "author: Alice <alice@example.com>, Bob (@bob), Carol (@carol) <carol@example.com>, Dan\ncreated: 2021-04-13\nrequires: 1, 2\nreplaces: 3\nsuperseded-by: 4\ndiscussions-to: https://example.test/discuss\n",
+        ));
         let catalog = collect_proposal_catalog(temp.path(), None).unwrap();
-        let search_records = catalog.search_metadata_records();
-        let record = &search_records["eip-1559"];
-        let relationships = &catalog.search_entries["eip-1559"].relationships;
-
-        assert_eq!(record.proposal_id, "EIP-1559");
-        assert_eq!(record.number, number(1559));
-        assert_eq!(record.prefix, ProposalCatalogPrefix::Eip);
-        assert_eq!(record.title, "Fee Market Change");
-        assert_eq!(
-            record.description.as_deref(),
-            Some("A transaction pricing mechanism.")
-        );
-        assert_eq!(record.status, "Final");
-        assert_eq!(record.proposal_type, "Standards Track");
-        assert_eq!(record.category.as_deref(), Some("Core"));
-        assert_eq!(
-            record.authors,
-            vec![
-                ProposalSearchAuthor {
-                    name: "Alice".to_owned(),
-                    github: None,
-                    email: Some("alice@example.com".to_owned()),
-                    display: "Alice <alice@example.com>".to_owned(),
-                },
-                ProposalSearchAuthor {
-                    name: "Bob".to_owned(),
-                    github: Some("bob".to_owned()),
-                    email: None,
-                    display: "Bob (@bob)".to_owned(),
-                },
-                ProposalSearchAuthor {
-                    name: "Carol".to_owned(),
-                    github: Some("carol".to_owned()),
-                    email: Some("carol@example.com".to_owned()),
-                    display: "Carol (@carol) <carol@example.com>".to_owned(),
-                },
-                ProposalSearchAuthor {
-                    name: "Dan".to_owned(),
-                    github: None,
-                    email: None,
-                    display: "Dan".to_owned(),
-                },
-            ]
-        );
-        assert_eq!(record.authors[3].display, "Dan");
-        assert_eq!(
-            record.author_filter_values,
-            vec![
-                "Alice".to_owned(),
-                "Bob".to_owned(),
-                "Carol".to_owned(),
-                "Dan".to_owned()
-            ]
-        );
-        assert_eq!(
-            record.created,
-            Some("2021-04-13".parse::<Datetime>().unwrap())
-        );
-        assert_eq!(record.url, "/1559/");
-        assert_eq!(relationships.requires, vec![number(1), number(2)]);
-        assert_eq!(relationships.replaces, vec![number(3)]);
-        assert_eq!(relationships.superseded_by, vec![number(4)]);
-        assert_eq!(
-            relationships.discussions_to.as_deref(),
-            Some("https://ethereum-magicians.org/t/eip-1559")
-        );
-    }
-
-    #[test]
-    fn proposal_catalog_search_metadata_handles_absent_optional_fields() {
-        let temp = TempDir::new().unwrap();
-        write_file(
-            temp.path(),
-            "001.md",
-            &catalog_proposal_markdown(1, "Minimal Proposal", None, None),
-        );
-
-        let catalog = collect_proposal_catalog(temp.path(), None).unwrap();
-        let search_records = catalog.search_metadata_records();
-        let record = &search_records["eip-1"];
-        let relationships = &catalog.search_entries["eip-1"].relationships;
-
-        assert_eq!(record.proposal_id, "EIP-1");
-        assert_eq!(record.prefix, ProposalCatalogPrefix::Eip);
-        assert_eq!(record.description, None);
-        assert_eq!(record.category, None);
-        assert!(record.authors.is_empty());
-        assert!(record.author_filter_values.is_empty());
-        assert_eq!(record.created, None);
-        assert_eq!(record.url, "/1/");
-        assert_eq!(relationships, &ProposalCatalogRelationships::default());
-    }
-
-    #[test]
-    fn proposal_catalog_search_metadata_uses_existing_url_policy() {
-        let temp = TempDir::new().unwrap();
-        write_file(
-            temp.path(),
-            "020.md",
-            &catalog_proposal_markdown(20, "Proposal 20", None, None),
-        );
-        write_file(
-            temp.path(),
-            "021.md",
-            &catalog_proposal_markdown(21, "Proposal 21", None, None),
-        );
-        write_file(
-            temp.path(),
-            "022.md",
-            &catalog_proposal_markdown(22, "Proposal 22", Some("ERC"), None),
-        );
-        let plan = OnlyRenderPlan::build(temp.path(), [number(20)].into_iter().collect()).unwrap();
-
-        let catalog = collect_proposal_catalog(temp.path(), Some(&plan)).unwrap();
-        let records = catalog.search_metadata_records();
-
-        assert_eq!(records["eip-20"].url, "/20/");
-        assert_eq!(
-            records["eip-21"].url,
-            "https://eips.ethereum.org/EIPS/eip-21"
-        );
-        assert_eq!(
-            records["erc-22"].url,
-            "https://ercs.ethereum.org/ERCS/erc-22"
-        );
-    }
-
-    #[test]
-    fn proposal_catalog_search_metadata_excludes_relationship_fields_by_default() {
-        let temp = TempDir::new().unwrap();
-        write_file(
-            temp.path(),
-            "001.md",
-            &catalog_proposal_markdown_with_extra(
-                1,
-                "Proposal 1",
-                None,
-                None,
-                "requires: 2\nreplaces: 3\nsuperseded-by: 4\ndiscussions-to: https://example.test/discuss\n",
-            ),
-        );
-
-        let catalog = collect_proposal_catalog(temp.path(), None).unwrap();
-        let search_records = catalog.search_metadata_records();
-        let record = &search_records["eip-1"];
+        let record = &catalog.records()["eip-1559"];
+        assert_eq!(record.authors.len(), 4);
+        assert_eq!(record.authors[0].email.as_deref(), Some("alice@example.com"));
+        assert_eq!(record.authors[1].github.as_deref(), Some("bob"));
+        assert_eq!(record.authors[2].github.as_deref(), Some("carol"));
+        assert_eq!(record.authors[2].email.as_deref(), Some("carol@example.com"));
+        assert_eq!(record.authors[3].name, "Dan");
+        assert_eq!(record.created, Some("2021-04-13".parse::<Datetime>().unwrap()));
+        assert_eq!(record.relationships.requires, vec![number(1), number(2)]);
+        assert_eq!(record.relationships.replaces, vec![number(3)]);
+        assert_eq!(record.relationships.superseded_by, vec![number(4)]);
+        assert_eq!(record.relationships.discussions_to.as_deref(), Some("https://example.test/discuss"));
         let value = serde_json::to_value(record).unwrap();
-        let object = value.as_object().unwrap();
+        let keys = value.as_object().unwrap().keys().map(String::as_str).collect::<Vec<_>>();
+        assert_eq!(keys, vec!["category", "description", "number", "prefix", "status", "title", "type"]);
+        let document = catalog.source_documents().next().unwrap();
+        assert_eq!(document.body(), "Body\n");
+        assert!(document.source_path().ends_with("1559/index.md"));
+    }
 
-        assert!(!object.contains_key("requires"));
-        assert!(!object.contains_key("replaces"));
-        assert!(!object.contains_key("superseded_by"));
-        assert!(!object.contains_key("superseded-by"));
-        assert!(!object.contains_key("discussions_to"));
-        assert!(!object.contains_key("discussions-to"));
+    #[test]
+    fn proposal_catalog_canonical_optional_fields_and_validation() {
+        let temp = TempDir::new().unwrap();
+        write_file(temp.path(), "001.md", &catalog_proposal_markdown(1, "Minimal", None, None));
+        let catalog = collect_proposal_catalog(temp.path(), None).unwrap();
+        let record = &catalog.records()["eip-1"];
+        assert!(record.authors.is_empty());
+        assert_eq!(record.created, None);
+        assert_eq!(record.relationships, ProposalCatalogRelationships::default());
+        for extra in ["created: not-a-date\n", "requires: not-a-number\n", "replaces: 0\n", "superseded-by: bad\n"] {
+            write_file(temp.path(), "001.md", &catalog_proposal_markdown_with_extra(1, "Invalid", None, None, extra));
+            assert!(collect_proposal_catalog(temp.path(), None).is_err(), "{extra}");
+        }
     }
 
     #[test]
@@ -1053,13 +804,16 @@ mod tests {
         let catalog = collect_proposal_catalog(temp.path(), Some(&plan)).unwrap();
         let records = catalog.into_records();
 
-        assert_eq!(records["eip-20"].url, "/20/");
+        assert_eq!(records["eip-21"].destination.local_route, None);
+        assert_eq!(records["erc-22"].destination.local_route, None);
+        assert_eq!(records["eip-20"].destination.public_url, "https://eips.ethereum.org/EIPS/eip-20");
+        assert_eq!(records["eip-20"].destination.local_route.as_deref(), Some("/20/"));
         assert_eq!(
-            records["eip-21"].url,
+            records["eip-21"].destination.public_url,
             "https://eips.ethereum.org/EIPS/eip-21"
         );
         assert_eq!(
-            records["erc-22"].url,
+            records["erc-22"].destination.public_url,
             "https://ercs.ethereum.org/ERCS/erc-22"
         );
     }

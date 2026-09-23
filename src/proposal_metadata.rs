@@ -284,7 +284,9 @@ mod tests {
         assert_eq!(proposal["status"], json!("Final"));
         assert_eq!(proposal["type"], json!("Standards Track"));
         assert_eq!(proposal["category"], json!("ERC"));
-        assert_eq!(proposal["url"], json!("/20/"));
+        assert_eq!(proposal.as_object().unwrap().len(), 7);
+        assert!(proposal.get("url").is_none());
+        assert!(proposal.get("destination").is_none());
     }
 
     #[test]
@@ -305,7 +307,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_metadata_full_build_records_use_local_urls() {
+    fn proposal_metadata_full_build_records_have_no_unused_destinations() {
         let temp = TempDir::new().unwrap();
         write_file(
             temp.path(),
@@ -315,7 +317,8 @@ mod tests {
 
         let metadata = write_metadata_json(temp.path(), "EIPs", None);
 
-        assert_eq!(metadata["proposals"]["eip-20"]["url"], json!("/20/"));
+        assert!(metadata["proposals"]["eip-20"].get("url").is_none());
+        assert!(metadata["proposals"]["eip-20"].get("destination").is_none());
     }
 
     #[test]
@@ -352,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_metadata_targeted_selected_records_use_local_urls() {
+    fn proposal_metadata_targeted_selected_records_have_no_unused_destinations() {
         let temp = TempDir::new().unwrap();
         write_file(
             temp.path(),
@@ -372,11 +375,12 @@ mod tests {
 
         let metadata = write_metadata_json(temp.path(), "EIPs", Some(&plan));
 
-        assert_eq!(metadata["proposals"]["eip-20"]["url"], json!("/20/"));
+        assert!(metadata["proposals"]["eip-20"].get("url").is_none());
+        assert!(metadata["proposals"]["eip-20"].get("destination").is_none());
     }
 
     #[test]
-    fn proposal_metadata_targeted_omitted_records_use_public_urls() {
+    fn proposal_metadata_targeted_omitted_records_have_no_unused_destinations() {
         let temp = TempDir::new().unwrap();
         write_file(
             temp.path(),
@@ -401,14 +405,12 @@ mod tests {
 
         let metadata = write_metadata_json(temp.path(), "EIPs", Some(&plan));
 
-        assert_eq!(
-            metadata["proposals"]["eip-21"]["url"],
-            json!("https://eips.ethereum.org/EIPS/eip-21")
-        );
-        assert_eq!(
-            metadata["proposals"]["erc-22"]["url"],
-            json!("https://ercs.ethereum.org/ERCS/erc-22")
-        );
+        for key in ["eip-21", "erc-22"] {
+            let record = &metadata["proposals"][key];
+            for unused in ["url", "destination", "local_route", "public_url", "authors", "created"] {
+                assert!(record.get(unused).is_none(), "{unused}");
+            }
+        }
     }
 
     #[test]
@@ -482,7 +484,7 @@ mod tests {
     }
 
     #[test]
-    fn proposal_metadata_json_schema_keys_stay_compatible_with_expanded_catalog() {
+    fn proposal_metadata_json_first_production_shape_excludes_internal_semantics() {
         let temp = TempDir::new().unwrap();
         write_file(
             temp.path(),
@@ -512,13 +514,12 @@ mod tests {
                 "prefix",
                 "status",
                 "title",
-                "type",
-                "url"
+                "type"
             ])
         );
         assert_eq!(proposal["number"], json!(1559));
         assert_eq!(proposal["prefix"], json!("EIP"));
-        assert_eq!(proposal["url"], json!("/1559/"));
+        assert!(proposal.get("url").is_none());
 
         let proposal = proposal.as_object().unwrap();
         assert!(!proposal.contains_key("authors"));

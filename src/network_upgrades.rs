@@ -23,7 +23,7 @@ use serde::Serialize;
 use snafu::{OptionExt, ResultExt, Whatever};
 
 use crate::{
-    proposal::{flat_proposal_number, path_component_proposal_number, ProposalNumber},
+    proposal::{flat_proposal_number, path_component_proposal_number, ProposalDestination, ProposalNumber},
     proposal_catalog::{
         ProposalCatalog, ProposalCatalogPrefix, ProposalCatalogRecord,
         ProposalCatalogSourceDocument,
@@ -43,7 +43,7 @@ pub(crate) struct NetworkUpgrade {
     pub(crate) slug: String,
     pub(crate) source_meta_eip: ProposalNumber,
     pub(crate) source_bucket: NetworkUpgradeSourceBucket,
-    pub(crate) meta_url: String,
+    pub(crate) meta: ProposalDestination,
     pub(crate) meta_status: String,
     pub(crate) stages: Vec<NetworkUpgradeStage>,
 }
@@ -62,7 +62,7 @@ pub(crate) struct NetworkUpgradeMemberRow {
     pub(crate) status: String,
     pub(crate) proposal_type: String,
     pub(crate) category: Option<String>,
-    pub(crate) url: String,
+    pub(crate) destination: ProposalDestination,
     pub(crate) subgroup: Option<String>,
 }
 
@@ -71,7 +71,7 @@ pub(crate) struct NetworkUpgradeMembership {
     pub(crate) display_name: String,
     pub(crate) slug: String,
     pub(crate) source_meta_eip: ProposalNumber,
-    pub(crate) meta_url: String,
+    pub(crate) meta: ProposalDestination,
     pub(crate) stage_key: String,
     pub(crate) stage_label: String,
     pub(crate) subgroup: Option<String>,
@@ -94,7 +94,7 @@ struct GeneratedHardfork {
     slug: String,
     display_name: String,
     meta_eip: ProposalNumber,
-    meta_url: String,
+    meta: ProposalDestination,
     meta_status: String,
     stages: Vec<GeneratedHardforkStage>,
 }
@@ -113,7 +113,7 @@ struct GeneratedHardforkRow {
     status: String,
     #[serde(rename = "type")]
     proposal_type: String,
-    url: String,
+    destination: ProposalDestination,
     #[serde(skip_serializing_if = "Option::is_none")]
     category: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -321,7 +321,7 @@ pub(crate) fn collect_network_upgrades_with_registries(
                         display_name: upgrade.display_name.clone(),
                         slug: upgrade.slug.clone(),
                         source_meta_eip: upgrade.source_meta_eip,
-                        meta_url: upgrade.meta_url.clone(),
+                        meta: upgrade.meta.clone(),
                         stage_key: stage.key.clone(),
                         stage_label: stage.label.clone(),
                         subgroup: row.subgroup.clone(),
@@ -694,7 +694,7 @@ fn generated_hardfork(upgrade: &NetworkUpgrade) -> GeneratedHardfork {
         slug: upgrade.slug.clone(),
         display_name: upgrade.display_name.clone(),
         meta_eip: upgrade.source_meta_eip,
-        meta_url: upgrade.meta_url.clone(),
+        meta: upgrade.meta.clone(),
         meta_status: upgrade.meta_status.clone(),
         stages: upgrade
             .stages
@@ -718,7 +718,7 @@ fn generated_hardfork_row(row: &NetworkUpgradeMemberRow) -> GeneratedHardforkRow
         title: row.title.clone(),
         status: row.status.clone(),
         proposal_type: row.proposal_type.clone(),
-        url: row.url.clone(),
+        destination: row.destination.clone(),
         category: row.category.clone(),
         subgroup: row.subgroup.clone(),
     }
@@ -922,7 +922,7 @@ fn build_network_upgrade(
         slug: selected_source.slug.clone(),
         source_meta_eip: selected_source.source_meta_eip,
         source_bucket: selected_source.source_bucket,
-        meta_url: meta_record.url.clone(),
+        meta: meta_record.destination.clone(),
         meta_status: meta_record.status.clone(),
         stages,
     })
@@ -944,7 +944,7 @@ fn member_row(
         } else {
             None
         },
-        url: record.url.clone(),
+        destination: record.destination.clone(),
         subgroup: member.subgroup,
     })
 }
@@ -2258,7 +2258,7 @@ mod tests {
         assert_eq!(upgrade["slug"].as_str().unwrap(), "pectra");
         assert_eq!(upgrade["display_name"].as_str().unwrap(), "Pectra");
         assert_eq!(upgrade["meta_eip"].as_integer().unwrap(), 7600);
-        assert_eq!(upgrade["meta_url"].as_str().unwrap(), "/7600/");
+        assert_eq!(upgrade["meta"]["local_route"].as_str().unwrap(), "/7600/");
         assert_eq!(upgrade["meta_status"].as_str().unwrap(), "Draft");
         assert_eq!(stage["key"].as_str().unwrap(), "included");
         assert_eq!(stage["label"].as_str().unwrap(), "Included");
@@ -2266,7 +2266,7 @@ mod tests {
         assert_eq!(rows[0]["title"].as_str().unwrap(), "Core proposal");
         assert_eq!(rows[0]["status"].as_str().unwrap(), "Final");
         assert_eq!(rows[0]["type"].as_str().unwrap(), "Standards Track");
-        assert_eq!(rows[0]["url"].as_str().unwrap(), "/2/");
+        assert_eq!(rows[0]["destination"]["local_route"].as_str().unwrap(), "/2/");
         assert_eq!(rows[0]["category"].as_str().unwrap(), "Core");
         assert_eq!(rows[0]["subgroup"].as_str().unwrap(), "Core EIPs");
         assert_eq!(rows[1]["type"].as_str().unwrap(), "Meta");
@@ -2367,12 +2367,16 @@ mod tests {
         let row = &upgrade["stages"].as_array().unwrap()[0]["rows"]
             .as_array()
             .unwrap()[0];
+        assert!(upgrade["meta"].get("local_route").is_none());
+        assert!(row["destination"].get("local_route").is_none());
+        assert!(upgrade.get("meta_url").is_none());
+        assert!(row.get("url").is_none());
         assert_eq!(
-            upgrade["meta_url"].as_str().unwrap(),
+            upgrade["meta"]["public_url"].as_str().unwrap(),
             "https://eips.ethereum.org/EIPS/eip-7773"
         );
         assert_eq!(
-            row["url"].as_str().unwrap(),
+            row["destination"]["public_url"].as_str().unwrap(),
             "https://eips.ethereum.org/EIPS/eip-2"
         );
     }

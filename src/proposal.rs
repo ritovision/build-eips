@@ -200,6 +200,29 @@ struct ProposalAssetInventoryEntry {
     kind: ProposalAssetKind,
 }
 
+/// A presentation destination, never a deployment-resolved proposal identity.
+/// An absent local route means the proposal is intentionally omitted from this render.
+/// Public fallback policy is available independently of that selection.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct ProposalDestination {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) local_route: Option<String>,
+    pub(crate) public_url: String,
+}
+
+impl ProposalDestination {
+    pub(crate) fn new(
+        number: ProposalNumber,
+        site: ProposalPublicSite,
+        rendered_locally: bool,
+    ) -> Self {
+        Self {
+            local_route: rendered_locally.then(|| format!("/{number}/")),
+            public_url: site.proposal_url(number),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProposalPublicSite {
     Eips,
@@ -785,8 +808,9 @@ pub(crate) fn public_site_for_markdown(
 #[allow(dead_code)]
 fn public_asset_url(entry: &ProposalAssetInventoryEntry) -> String {
     let mut url = format!(
-        "{}/{}/assets",
+        "{}/assets/{}-{}",
         entry.site.asset_base_url(),
+        entry.site.proposal_prefix().to_ascii_lowercase(),
         entry.proposal_number.get()
     );
     for component in entry.asset_relative_path.components() {
@@ -798,8 +822,17 @@ fn public_asset_url(entry: &ProposalAssetInventoryEntry) -> String {
     }
 
     if entry.kind == ProposalAssetKind::Markdown {
-        url.truncate(url.len() - ".md".len());
-        url.push('/');
+        // Official sites render Markdown pages as .html, with README/index
+        // documents at their directory index. This is not the WG /N/assets/ layout.
+        if matches!(
+            entry.asset_relative_path.file_name().and_then(OsStr::to_str),
+            Some("README.md" | "index.md")
+        ) {
+            url.truncate(url.rfind('/').expect("asset URL has a parent") + 1);
+        } else {
+            url.truncate(url.len() - ".md".len());
+            url.push_str(".html");
+        }
     }
 
     url
@@ -1219,12 +1252,12 @@ mod tests {
         assert_eq!(
             plan.public_url_for_omitted_proposal_asset(Path::new("00678/assets/foo.pdf"))
                 .unwrap(),
-            "https://ercs.ethereum.org/678/assets/foo.pdf"
+            "https://ercs.ethereum.org/assets/erc-678/foo.pdf"
         );
         assert_eq!(
             plan.public_url_for_omitted_proposal_asset(Path::new("00678/assets/guide.md"))
                 .unwrap(),
-            "https://ercs.ethereum.org/678/assets/guide/"
+            "https://ercs.ethereum.org/assets/erc-678/guide.html"
         );
     }
 
@@ -1247,19 +1280,19 @@ mod tests {
         assert_eq!(
             plan.public_url_for_omitted_proposal_asset(Path::new("00678/assets/README.md"))
                 .unwrap(),
-            "https://eips.ethereum.org/678/assets/README/"
+            "https://eips.ethereum.org/assets/eip-678/"
         );
         assert_eq!(
             plan.public_url_for_omitted_proposal_asset(Path::new("00678/assets/index.md"))
                 .unwrap(),
-            "https://eips.ethereum.org/678/assets/index/"
+            "https://eips.ethereum.org/assets/eip-678/"
         );
         assert_eq!(
             plan.public_url_for_omitted_proposal_asset(Path::new(
                 "00678/assets/Contract Interactions diagram.svg"
             ))
             .unwrap(),
-            "https://eips.ethereum.org/678/assets/Contract%20Interactions%20diagram.svg"
+            "https://eips.ethereum.org/assets/eip-678/Contract%20Interactions%20diagram.svg"
         );
     }
 
