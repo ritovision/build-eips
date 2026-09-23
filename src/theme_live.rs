@@ -23,6 +23,7 @@ pub(crate) struct LiveTheme {
     previous_paths: BTreeSet<PathBuf>,
     pending: BTreeSet<PathBuf>,
     publication_uncertain: bool,
+    render_pending: bool,
 }
 
 impl LiveTheme {
@@ -67,6 +68,7 @@ impl LiveTheme {
             previous_paths,
             pending: BTreeSet::new(),
             publication_uncertain: false,
+            render_pending: false,
         };
         state.synchronize()?;
         Ok(state)
@@ -127,21 +129,25 @@ impl LiveTheme {
         self.configuration.verify()?;
         self.publication_uncertain = true;
         let output = crate::layout::serve_output_path(self.config.owned_root.parent().unwrap());
-        let refresh = crate::zola::prepare_static_output(&self.stage, &output, &affected)
+        let changed = crate::publication::changed_paths(&self.stage, &self.config.mounted_theme_dir, &affected)
+            .whatever_context("unable to compare theme publication; retry pending")?;
+        let refresh = crate::zola::prepare_static_output(&self.stage, &output, &changed)
             .whatever_context("unable to invalidate theme static output; retry pending")?;
-        git::sync_working_tree_paths(&self.stage, &self.config.mounted_theme_dir, &affected)
+        self.render_pending |= refresh;
+        let published = crate::publication::publish(&self.stage, &self.config.mounted_theme_dir, &changed)
             .whatever_context(
                 "unable to publish theme generation; update may be partial, retry pending",
             )?;
-        if refresh {
+        if self.render_pending {
             crate::zola::request_full_rebuild(&self.config.owned_root)
                 .whatever_context("unable to refresh theme output; retry pending")?;
+            self.render_pending = false;
         }
         self.previous_paths = snapshot.paths.clone();
         self.previous = Some(snapshot);
         self.pending.clear();
         self.publication_uncertain = false;
-        log::info!("published theme generation: {} path(s)", affected.len());
-        Ok(affected.len())
+        log::info!("published theme generation: {} path(s)", published);
+        Ok(published)
     }
 }

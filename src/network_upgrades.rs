@@ -14,7 +14,6 @@ use std::{
 };
 
 use chrono::{Datelike, NaiveDate};
-use eipw_preamble::Preamble;
 use lazy_static::lazy_static;
 use log::warn;
 use pulldown_cmark::{CowStr, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
@@ -430,24 +429,6 @@ pub(crate) fn write_hardforks_index(
     })?;
 
     Ok(())
-}
-
-pub(crate) fn is_registered_network_upgrade_source_number(proposal_number: ProposalNumber) -> bool {
-    transitional_modern_registry()
-        .into_iter()
-        .chain(permanent_registry())
-        .any(|source| source.source_meta_eip == proposal_number.get())
-}
-
-pub(crate) fn markdown_has_network_upgrade_marker(contents: &str) -> bool {
-    let Ok((preamble, _)) = Preamble::split(contents) else {
-        return false;
-    };
-    let Ok(preamble) = Preamble::parse(None, preamble) else {
-        return false;
-    };
-
-    preamble.by_name("network-upgrade").is_some()
 }
 
 pub(crate) fn transitional_modern_registry() -> Vec<NetworkUpgradeRegistrySource> {

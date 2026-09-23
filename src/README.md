@@ -22,7 +22,10 @@ This file documents how the preprocessor crate is organized: which module owns e
 - `print.rs` owns diagnostic print subcommands.
 - `progress.rs` owns progress/log rendering helpers.
 - `proposal.rs` owns proposal path classification, proposal-number parsing, and targeted-rendering selection policy.
-- `serve.rs` owns dirty active-repository and local-theme serve synchronization.
+- `serve.rs` owns dirty active-repository and local-theme watcher orchestration.
+- `live.rs` owns accepted raw/semantic generations and private source reconciliation; `live_semantics_tests.rs` contains its focused generation regressions.
+- `publication.rs` owns write-if-changed, per-file atomic publication into disposable live trees.
+- `theme_live.rs` owns private local-theme staging and diffed publication.
 - `workspace.rs` owns local workspace setup and diagnostics.
 - `zola.rs` owns Zola discovery, theme mounting, and Zola command invocation.
 
@@ -55,3 +58,5 @@ Lower-level or shared modules should not import higher-level orchestration modul
 ## Visibility
 
 Do not make private helpers `pub` or `pub(crate)` just to move a test. If a test needs direct access to private module behavior, it probably belongs in that module's `#[cfg(test)]` block. Use `src/tests.rs` for cross-module behavior tests that exercise crate-visible paths.
+
+The live generation contract and failure boundaries are documented in [`docs/live-serve-semantics.md`](../docs/live-serve-semantics.md). Real process/HTTP acceptance belongs to the coordination harness; unit tests alone do not prove renderer convergence.

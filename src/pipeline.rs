@@ -111,7 +111,6 @@ pub(crate) struct Prepared {
     theme_path: PathBuf,
     local_theme_sync: Option<LocalThemeServeSync>,
     only_plan: Option<OnlyRenderPlan>,
-    network_upgrade_index: network_upgrades::NetworkUpgradeIndex,
     source_root: PathBuf,
     source_generation: git::SourceGeneration,
     source_materialization: git::SourceMaterialization,
@@ -219,8 +218,7 @@ impl Prepared {
             .map(|selected_numbers| OnlyRenderPlan::build(&content_path, selected_numbers))
             .transpose()
             .whatever_context("unable to build targeted render plan")?;
-        let network_upgrade_index =
-            prepare_runtime_derived_data(&repo_path, &repository_use.title, only_plan.as_ref())?;
+        prepare_runtime_derived_data(&repo_path, &repository_use.title, only_plan.as_ref())?;
         if let Some(only_plan) = &only_plan {
             only_plan
                 .prune_content(&content_path)
@@ -236,7 +234,6 @@ impl Prepared {
             repo_path,
             output_path,
             only_plan,
-            network_upgrade_index,
             source_root: root_path,
             source_generation,
             source_materialization,
@@ -284,7 +281,7 @@ impl Prepared {
             &self.source_root,
             &self.repo_path,
             self.only_plan.clone(),
-            Some(self.network_upgrade_index.clone()),
+            &self.repository_use.title,
             self.local_theme_sync.clone(),
         );
         sync_config.set_source_generation(self.source_generation);

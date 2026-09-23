@@ -160,7 +160,24 @@ pub(crate) fn request_full_rebuild(project: &Path) -> std::io::Result<()> {
     } // isolated non-Zola unit fixtures
     let resolved = config.canonicalize()?;
     crate::generated_fs::check_path(&project.canonicalize()?, &resolved, false)?;
-    std::fs::File::open(resolved)?.set_modified(std::time::SystemTime::now())
+    // Zola ignores mtime-only notifications. A changed comment in the mounted
+    // theme config produces a real theme-data event and reloads the complete
+    // site, including listings/taxonomies/feeds. One call follows each coalesced
+    // publication, not each changed proposal. Never modify the source theme.
+    static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    const MARKER: &str = "\n# build-eips live render request: ";
+    let current = std::fs::read_to_string(&resolved)?;
+    let original = current.rsplit_once(MARKER)
+        .filter(|(_, suffix)| suffix.trim().parse::<u64>().is_ok())
+        .map(|(original, _)| original).unwrap_or(&current);
+    let sequence = REQUEST.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    let bytes = format!("{original}{MARKER}{sequence}\n");
+    let temporary = tempfile::NamedTempFile::new_in(project.parent().unwrap())?;
+    std::fs::write(temporary.path(), bytes)?;
+    temporary.as_file().set_permissions(std::fs::metadata(&resolved)?.permissions())?;
+    temporary.persist(&resolved).map_err(|error| error.error)?;
+    info!("requested coalesced full Zola render");
+    Ok(())
 }
 
 pub fn check(theme_dir: &Path, project_path: &Path) -> Result<(), Error> {

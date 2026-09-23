@@ -57,7 +57,7 @@ impl fmt::Display for ProposalCatalogPrefix {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct ProposalCatalogRecord {
     pub(crate) number: ProposalNumber,
     pub(crate) prefix: ProposalCatalogPrefix,

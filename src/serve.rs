@@ -23,7 +23,7 @@ use notify::{Event, RecursiveMode, Watcher};
 use snafu::{Report, ResultExt, Whatever};
 
 use crate::{
-    git, live::LiveSource, network_upgrades::NetworkUpgradeIndex, proposal::OnlyRenderPlan,
+    git, live::LiveSource, proposal::OnlyRenderPlan,
     theme_live::LiveTheme,
 };
 
@@ -38,7 +38,7 @@ struct ActiveRepoServeSync {
     source_root: PathBuf,
     build_repo_path: PathBuf,
     only_plan: Option<OnlyRenderPlan>,
-    network_upgrade_index: Option<NetworkUpgradeIndex>,
+    repository_title: String,
     source_generation: Option<git::SourceGeneration>,
 }
 
@@ -329,11 +329,9 @@ fn dirty_serve_sync_loop(
                 active.only_plan.as_ref(),
                 commit,
                 sync_config.configuration.clone(),
+                &active.repository_title,
             ) {
-                Ok(mut state) => {
-                    state.set_network_upgrade_index(active.network_upgrade_index.clone());
-                    Some(state)
-                }
+                Ok(state) => Some(state),
                 Err(error) => {
                     let _ = ready_tx.send(Err(format!(
                         "unable to initialize live source generation: {}",
@@ -474,7 +472,7 @@ pub(crate) fn serve_sync_config(
     source_root: &Path,
     repo_path: &Path,
     only_plan: Option<OnlyRenderPlan>,
-    network_upgrade_index: Option<NetworkUpgradeIndex>,
+    repository_title: &str,
     local_theme_sync: Option<LocalThemeServeSync>,
 ) -> ServeSyncConfig {
     ServeSyncConfig {
@@ -484,7 +482,7 @@ pub(crate) fn serve_sync_config(
                 source_root: source_root.to_path_buf(),
                 build_repo_path: repo_path.to_path_buf(),
                 only_plan,
-                network_upgrade_index,
+                repository_title: repository_title.to_owned(),
                 source_generation: None,
             }
         }),
@@ -563,12 +561,13 @@ mod tests {
         for (relative, contents) in files {
             write_file(root, relative, contents);
         }
+        if root.join("content").is_dir() { crate::live::fixture::complete_sources(root); }
         commit_all(&repo, "initial");
         repo
     }
 
     fn proposal_markdown(value: u32, extra_preamble: &str, body: &str) -> String {
-        format!("---\neip: {value}\ntitle: Proposal {value}\n{extra_preamble}---\n{body}\n")
+        format!("---\neip: {value}\ntitle: Proposal {value}\nstatus: Draft\ntype: Standards Track\ncreated: 2020-01-01\n{extra_preamble}---\n{body}\n")
     }
 
     fn only_plan(root: &Path) -> OnlyRenderPlan {
@@ -606,8 +605,7 @@ mod tests {
         let plan =
             OnlyRenderPlan::build(&build.join("content"), [number(555)].into_iter().collect())
                 .unwrap();
-        crate::markdown::preprocess(&build.join("content"), Some(&plan)).unwrap();
-        plan.prune_content(&build.join("content")).unwrap();
+        crate::live::fixture::prepare(&build, Some(&plan));
         (temp, source, build, plan)
     }
 
@@ -666,7 +664,7 @@ mod tests {
             &temp.path().join("Core"),
             &temp.path().join(".local-build/Core/repo"),
             Some(plan),
-            None,
+            "EIPs",
             Some(fake_theme_sync(temp.path())),
         );
 
@@ -689,7 +687,7 @@ mod tests {
             &temp.path().join("Core"),
             &temp.path().join(".local-build/Core/repo"),
             None,
-            None,
+            "EIPs",
             Some(fake_theme_sync(temp.path())),
         );
 
@@ -710,6 +708,7 @@ mod tests {
                 materialized_head: commit,
             },
             Default::default(),
+            "EIPs",
         )
         .unwrap();
         write_file(
@@ -741,6 +740,7 @@ mod tests {
                 materialized_head: commit,
             },
             Default::default(),
+            "EIPs",
         )
         .unwrap();
         write_file(
@@ -769,6 +769,7 @@ mod tests {
                 materialized_head: commit,
             },
             Default::default(),
+            "EIPs",
         )
         .unwrap();
         write_file(
@@ -802,6 +803,7 @@ mod tests {
                 materialized_head: commit,
             },
             Default::default(),
+            "EIPs",
         )
         .unwrap();
         std::fs::remove_file(source.join("content/00555.md")).unwrap();
@@ -823,7 +825,7 @@ mod live_generation_regressions {
         fs::write(path, text).unwrap();
     }
     fn markdown(n: u32, body: &str) -> String {
-        format!("---\neip: {n}\ntitle: Proposal {n}\n---\n{body}\n")
+        format!("---\neip: {n}\ntitle: Proposal {n}\nstatus: Draft\ntype: Standards Track\ncreated: 2020-01-01\n---\n{body}\n")
     }
     fn commit(repo: &Repository) -> git2::Oid {
         let mut index = repo.index().unwrap();
@@ -862,6 +864,7 @@ mod live_generation_regressions {
             let repo = Repository::init(&source).unwrap();
             write(&source, "content/00001.md", &markdown(1, "ORIGINAL"));
             write(&source, "content/00002.md", &markdown(2, "OTHER"));
+            crate::live::fixture::complete_sources(&source);
             let head = commit(&repo);
             Repository::clone(source.to_str().unwrap(), &build).unwrap();
             let plan = targeted.then(|| {
@@ -873,10 +876,7 @@ mod live_generation_regressions {
                 )
                 .unwrap()
             });
-            crate::markdown::preprocess(&build.join("content"), plan.as_ref()).unwrap();
-            if let Some(plan) = &plan {
-                plan.prune_content(&build.join("content")).unwrap();
-            }
+            crate::live::fixture::prepare(&build, plan.as_ref());
             Self {
                 _temp: temp,
                 source,
@@ -896,6 +896,7 @@ mod live_generation_regressions {
                 self.plan.as_ref(),
                 self.generation,
                 Default::default(),
+                "EIPs",
             )
             .unwrap()
         }
@@ -1006,7 +1007,7 @@ mod live_generation_regressions {
             source_root: f.source.clone(),
             build_repo_path: f.build.clone(),
             only_plan: None,
-            network_upgrade_index: None,
+            repository_title: "EIPs".to_owned(),
             source_generation: Some(f.generation),
         };
         let index = Event::new(notify::EventKind::Any).add_path(paths.index.clone());

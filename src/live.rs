@@ -15,7 +15,9 @@ use crate::{
     layout::CONTENT_DIR,
     markdown,
     network_upgrades::{self, NetworkUpgradeIndex},
-    proposal::{proposal_number_from_content_markdown_path, OnlyRenderPlan, ProposalNumber},
+    proposal_catalog::{self, ProposalCatalog},
+    proposal_metadata,
+    proposal::{OnlyRenderPlan, ProposalNumber},
 };
 use git2::{
     build::CheckoutBuilder, ObjectType, Oid, Repository, Signature, TreeWalkMode, TreeWalkResult,
@@ -32,11 +34,17 @@ pub(crate) struct LiveSource {
     live: PathBuf,
     stage: PathBuf,
     selection: Option<BTreeSet<ProposalNumber>>,
-    initial_merged: Oid,
+    last_good_commit: Oid,
     last_good_tree: Oid,
     publication_uncertain: bool,
+    render_pending: bool,
     configuration: crate::execution::ConfigurationSnapshot,
-    network_upgrade_index: Option<NetworkUpgradeIndex>,
+    repository_title: String,
+    accepted_catalog: ProposalCatalog,
+    accepted_index: NetworkUpgradeIndex,
+    accepted_projections: BTreeMap<PathBuf, Oid>,
+    generated_in_stage: bool,
+    pending_publication: BTreeSet<PathBuf>,
     sibling_files: BTreeMap<PathBuf, (Oid, i32)>,
     previous_head: Oid,
     previous_paths: BTreeSet<PathBuf>,
@@ -65,48 +73,39 @@ fn tree_files(repo: &Repository, commit: Oid) -> Result<BTreeMap<PathBuf, (Oid, 
     Ok(paths)
 }
 
-fn is_hardfork_meta_eip_path(source_root: &Path, repo_relative_path: &Path) -> bool {
-    let Ok(content_relative_path) = repo_relative_path.strip_prefix(CONTENT_DIR) else {
-        return false;
-    };
-    let Some(proposal_number) = proposal_number_from_content_markdown_path(content_relative_path)
-    else {
-        return false;
-    };
+// These two files are generated only after raw admission succeeds. They are
+// removed from PRIVATE staging before the next raw generation is admitted.
+// This is a finite generator list, not authority to delete authored output.
+const DERIVED_PATHS: &[&str] = &[
+    "static/assets/data/proposals.json",
+    "content/hardforks/_index.md",
+];
 
-    if network_upgrades::is_registered_network_upgrade_source_number(proposal_number) {
-        return true;
-    }
-
-    std::fs::read_to_string(source_root.join(repo_relative_path))
-        .map(|contents| network_upgrades::markdown_has_network_upgrade_marker(&contents))
-        .unwrap_or(false)
-}
-
-fn changed_hardfork_meta_eip_paths(
+fn raw_changes(
     repo: &Repository,
-    source_root: &Path,
     previous: &git2::Tree<'_>,
     candidate: &git2::Tree<'_>,
 ) -> Result<BTreeSet<PathBuf>, Whatever> {
     let diff = repo.diff_tree_to_tree(Some(previous), Some(candidate), None)
-        .whatever_context("unable to inspect changed hardfork source paths")?;
-    let mut paths = BTreeSet::new();
-    for delta in diff.deltas() {
-        for path in [delta.old_file().path(), delta.new_file().path()].into_iter().flatten() {
-            let is_proposal = path.strip_prefix(CONTENT_DIR).ok()
-                .and_then(proposal_number_from_content_markdown_path).is_some();
-            if !is_proposal { continue; }
-            let previously_marked = previous.get_path(path).ok()
-                .and_then(|entry| repo.find_blob(entry.id()).ok())
-                .is_some_and(|blob| std::str::from_utf8(blob.content()).is_ok_and(
-                    network_upgrades::markdown_has_network_upgrade_marker));
-            if is_hardfork_meta_eip_path(source_root, path) || previously_marked {
-                paths.insert(path.to_path_buf());
-            }
-        }
-    }
-    Ok(paths)
+        .whatever_context("unable to compare accepted raw generation")?;
+    Ok(diff.deltas().flat_map(|delta| {
+        [delta.old_file().path().map(Path::to_path_buf),
+         delta.new_file().path().map(Path::to_path_buf)]
+    }).flatten().collect())
+}
+
+fn projection_hash(path: &Path) -> Result<Oid, Whatever> {
+    let bytes = std::fs::read(path).whatever_context("unable to read prepared proposal projection")?;
+    Oid::hash_object(ObjectType::Blob, &bytes)
+        .whatever_context("unable to compare prepared proposal projection")
+}
+
+fn proposal_paths(catalog: &ProposalCatalog, stage: &Path, plan: Option<&OnlyRenderPlan>)
+    -> BTreeSet<PathBuf>
+{
+    catalog.source_documents().map(|document| {
+        document.source_path().strip_prefix(stage).expect("catalog belongs to raw staging").to_path_buf()
+    }).filter(|path| plan.is_none_or(|plan| plan.should_sync_dirty_path(path))).collect()
 }
 
 impl LiveSource {
@@ -116,6 +115,7 @@ impl LiveSource {
         plan: Option<&OnlyRenderPlan>,
         generation: git::SourceGeneration,
         configuration: crate::execution::ConfigurationSnapshot,
+        repository_title: &str,
     ) -> Result<Self, Whatever> {
         let scratch = tempfile::Builder::new()
             .prefix(".serve-generation-")
@@ -156,21 +156,37 @@ impl LiveSource {
             }
             cursor = commit.parent_id(0).unwrap();
         }
+        // The clone is the exact admitted raw generation used by preparation,
+        // not the current source after a startup gap. Install ALL accepted
+        // semantics/projections before forced reconciliation observes edits.
+        let accepted_catalog = proposal_catalog::collect_proposal_catalog(&stage.join(CONTENT_DIR), plan)
+            .whatever_context("unable to initialize accepted proposal catalog")?;
+        let accepted_index = network_upgrades::collect_network_upgrades(&accepted_catalog)
+            .whatever_context("unable to initialize accepted network upgrades")?;
+        let accepted_projections = proposal_paths(&accepted_catalog, &stage, plan).into_iter()
+            .map(|path| projection_hash(&live.join(&path)).map(|hash| (path, hash)))
+            .collect::<Result<_, _>>()?;
         let mut state = Self {
             _scratch: scratch,
             source: source.into(),
             live: live.into(),
             stage,
             selection: plan.map(OnlyRenderPlan::selected_numbers),
-            initial_merged,
+            last_good_commit: initial_merged,
             last_good_tree: repo
                 .find_commit(initial_merged)
                 .and_then(|c| c.tree())
                 .whatever_context("unable to identify initial validated input")?
                 .id(),
             publication_uncertain: false,
+            render_pending: false,
             configuration,
-            network_upgrade_index: None,
+            repository_title: repository_title.to_owned(),
+            accepted_catalog,
+            accepted_index,
+            accepted_projections,
+            generated_in_stage: false,
+            pending_publication: BTreeSet::new(),
             sibling_files,
             previous_head: generation.source_head,
             previous_paths: active_files
@@ -185,10 +201,6 @@ impl LiveSource {
         // prepared generation rather than merely sampling status after a gap.
         state.synchronize_inner(true)?;
         Ok(state)
-    }
-
-    pub(crate) fn set_network_upgrade_index(&mut self, index: Option<NetworkUpgradeIndex>) {
-        self.network_upgrade_index = index;
     }
 
     pub(crate) fn needs_publication_retry(&self) -> bool {
@@ -207,7 +219,6 @@ impl LiveSource {
             dirty,
         } = Snapshot::capture(&self.source, true)?;
         let head_changed = stamp.0 != self.previous_head;
-        let inventory_changed = current != self.previous_paths;
         let mut affected: BTreeSet<_> = self.previous_dirty.union(&dirty).cloned().collect();
         affected.extend(self.previous_paths.symmetric_difference(&current).cloned());
         affected.extend(self.pending.iter().cloned());
@@ -222,6 +233,20 @@ impl LiveSource {
         let files_before = file_stamps(&self.source, &affected)?;
         let repo = git::open_generated_repository(&self.stage)
             .whatever_context("unable to open serve staging repository")?;
+        if self.generated_in_stage {
+            for relative in DERIVED_PATHS {
+                let path = self.stage.join(relative);
+                crate::generated_fs::check_path(&self.stage, &path, false)
+                    .whatever_context("unsafe private derived path")?;
+                match std::fs::remove_file(path) {
+                    Ok(()) => {},
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+                    Err(error) => return Err(error).whatever_context("unable to clear private derived input"),
+                }
+            }
+            crate::reserved::clear_empty_staged_reservations(&self.stage)?;
+            self.generated_in_stage = false;
+        }
         if repo.find_commit(stamp.0).is_err() {
             let url = url::Url::from_directory_path(&self.source)
                 .map_err(|_| ())
@@ -362,23 +387,15 @@ impl LiveSource {
             self.pending.clear();
             return Ok(0);
         }
-        // Forced initialization and HEAD-only changes are not edits. Warn only
-        // for actual raw changes against the last accepted input, not `affected`.
-        // This restart advice remains necessary until DEC-003 is implemented.
         let previous_tree = repo.find_tree(self.last_good_tree)
             .whatever_context("unable to inspect accepted raw input")?;
-        for path in changed_hardfork_meta_eip_paths(&repo, &self.stage, &previous_tree, &tree)? {
-            log::warn!(
-                "edit detected in hardfork Meta EIP `{}`; restart `build-eips serve` to refresh /hardforks/ and member EIP rows",
-                path.to_string_lossy()
-            );
-        }
+        let changed = raw_changes(&repo, &previous_tree, &tree)?;
         let source_parent = repo
             .find_commit(stamp.0)
             .whatever_context("source HEAD moved during preparation; retry")?;
         let merged_parent = repo
-            .find_commit(self.initial_merged)
-            .whatever_context("unable to read initial merged source")?;
+            .find_commit(self.last_good_commit)
+            .whatever_context("unable to read accepted raw source")?;
         let parents = if source_parent.id() == merged_parent.id() {
             vec![&source_parent]
         } else {
@@ -404,38 +421,82 @@ impl LiveSource {
             .map(|selected| OnlyRenderPlan::build_live(&self.stage.join("content"), selected))
             .transpose()
             .whatever_context("unable to refresh targeted inventory; last-good input retained")?;
-        let mut publish = to_copy;
-        // An inventory/HEAD change may change links in otherwise untouched pages.
-        // In targeted mode this reprocesses only the selected/retained Markdown.
-        if plan.is_some() || force || head_changed || inventory_changed {
-            for path in git::tracked_paths(&self.stage, |p| {
-                p.starts_with("content") && p.extension().is_some_and(|x| x == "md")
-            })
-            .whatever_context("unable to enumerate retained Markdown")?
+        // Every candidate derives the complete catalog and aggregate model.
+        // Accepted state is used for comparison, never incremental mutation.
+        let candidate_catalog = proposal_catalog::collect_proposal_catalog(&self.stage.join(CONTENT_DIR), plan.as_ref())
+            .whatever_context("candidate proposal semantics rejected; last-good input retained")?;
+        let candidate_index = network_upgrades::collect_network_upgrades(&candidate_catalog)
+            .whatever_context("candidate network upgrades rejected; last-good input retained")?;
+        let mut global_semantics_changed = candidate_catalog.records() != self.accepted_catalog.records()
+            || candidate_index != self.accepted_index;
+        let candidate_paths = proposal_paths(&candidate_catalog, &self.stage, plan.as_ref());
+        let old_paths: BTreeSet<_> = self.accepted_projections.keys().cloned().collect();
+        global_semantics_changed |= candidate_paths != old_paths;
+        let mut preprocess = changed.clone();
+        // A failed publication may have installed projections not represented by
+        // the accepted state. Recompute those paths even when the source reverts.
+        preprocess.extend(self.pending_publication.iter().cloned());
+        for document in candidate_catalog.source_documents() {
+            let number = document.number();
+            if candidate_index.memberships_by_proposal.get(&number)
+                != self.accepted_index.memberships_by_proposal.get(&number)
             {
-                publish.insert(path);
+                preprocess.insert(document.source_path().strip_prefix(&self.stage).unwrap().to_path_buf());
             }
         }
-        if let Some(plan) = &plan {
-            publish.retain(|path| {
-                if plan.should_sync_dirty_path(path) {
-                    return true;
-                }
-                // Selected proposal deletion/rename must still remove its old path.
-                let Ok(relative) = path.strip_prefix("content") else {
-                    return true;
-                };
-                crate::proposal::proposal_number_from_content_markdown_path(relative)
-                    .is_some_and(|n| self.selection.as_ref().unwrap().contains(&n))
-            });
+        // Inventory, destination identity, or asset route changes can alter links
+        // in otherwise unchanged retained Markdown. Reconsider those projections,
+        // but byte-diff them: this MUST NOT republish the entire proposal tree.
+        let inventory_changed = {
+            let diff = repo.diff_tree_to_tree(Some(&previous_tree), Some(&tree), None)
+                .whatever_context("unable to compare raw inventory")?;
+            diff.deltas().any(|delta| delta.status() != git2::Delta::Modified)
+        };
+        let structural_content_change = inventory_changed && changed.iter().any(|path| path.starts_with(CONTENT_DIR));
+        let destinations_changed = candidate_catalog.records().iter().any(|(key, record)| {
+            self.accepted_catalog.records().get(key).is_none_or(|old| old.destination != record.destination)
+        }) || candidate_catalog.records().len() != self.accepted_catalog.records().len();
+        let all_proposal_paths = proposal_paths(&candidate_catalog, &self.stage, None);
+        let old_proposal_paths = proposal_paths(&self.accepted_catalog, &self.stage, None);
+        let native_route_changed = changed.iter().any(|path| {
+            path.starts_with(CONTENT_DIR) && path.extension().is_some_and(|x| x == "md")
+                && !all_proposal_paths.contains(path) && !old_proposal_paths.contains(path)
+        });
+        if head_changed || inventory_changed || destinations_changed || native_route_changed {
+            preprocess.extend(git::tracked_paths(&self.stage, |path| {
+                path.starts_with(CONTENT_DIR) && path.extension().is_some_and(|x| x == "md")
+            }).whatever_context("unable to enumerate retained Markdown")?);
         }
+        let retained = |path: &PathBuf| plan.as_ref().is_none_or(|plan| {
+            plan.should_sync_dirty_path(path) || old_paths.contains(path)
+        });
+        preprocess.retain(retained);
+        // Generated hardfork Markdown is NOT source Markdown to preprocess.
+        for relative in DERIVED_PATHS { preprocess.remove(Path::new(relative)); }
         markdown::preprocess_paths_with_network_upgrades(
-            &self.stage.join("content"),
-            &publish,
-            plan.as_ref(),
-            self.network_upgrade_index.as_ref(),
-        )
-        .whatever_context("unable to preprocess candidate generation; last-good input retained")?;
+            &self.stage.join(CONTENT_DIR), &preprocess, plan.as_ref(), Some(&candidate_index),
+        ).whatever_context("unable to preprocess candidate generation; last-good input retained")?;
+        let candidate_projections = candidate_paths.iter().map(|path| {
+            if preprocess.contains(path) || !self.accepted_projections.contains_key(path) {
+                projection_hash(&self.stage.join(path)).map(|hash| (path.clone(), hash))
+            } else {
+                Ok((path.clone(), self.accepted_projections[path]))
+            }
+        }).collect::<Result<BTreeMap<_, _>, Whatever>>()?;
+        let mut publish: BTreeSet<_> = changed.into_iter().filter(retained).collect();
+        publish.extend(self.pending_publication.iter().cloned());
+        publish.extend(preprocess.iter().filter(|path| !candidate_paths.contains(*path)).cloned());
+        for path in old_paths.union(&candidate_paths) {
+            if self.accepted_projections.get(path) != candidate_projections.get(path) {
+                publish.insert(path.clone());
+            }
+        }
+        self.generated_in_stage = true;
+        proposal_metadata::write_proposal_metadata_json_from_catalog(&self.stage, &self.repository_title, &candidate_catalog)
+            .whatever_context("unable to derive candidate proposal metadata; last-good input retained")?;
+        network_upgrades::write_hardforks_index(&self.stage.join(CONTENT_DIR), &candidate_index)
+            .whatever_context("unable to derive candidate hardfork index; last-good input retained")?;
+        publish.extend(DERIVED_PATHS.iter().map(PathBuf::from));
         if source_stamp(&self.source)? != stamp
             || file_stamps(&self.source, &affected)? != files_before
         {
@@ -450,18 +511,36 @@ impl LiveSource {
         )?;
         // This boundary is intentionally after all parsing and transformation.
         // Publication I/O can still fail midway; keep pending paths for retry.
+        self.pending_publication.extend(publish.iter().cloned());
         self.publication_uncertain = true;
+        let changed_publication = crate::publication::changed_paths(&self.stage, &self.live, &publish)
+            .whatever_context("unable to compare publication; retry pending")?;
         let output = crate::layout::serve_output_path(self.live.parent().unwrap());
-        let refresh = crate::zola::prepare_static_output(&self.stage, &output, &publish)
+        let static_refresh = crate::zola::prepare_static_output(&self.stage, &output, &changed_publication)
             .whatever_context("unable to invalidate stale static output; retry pending")?;
-        git::sync_working_tree_paths(&self.stage, &self.live, &publish).whatever_context(
-            "unable to publish validated generation; update may be partial, retry pending",
-        )?;
-        if refresh {
-            crate::zola::request_full_rebuild(&self.live).whatever_context(
-                "unable to refresh Zola after a static tree transition; retry pending",
-            )?;
+        // Zola already performs a full render when a non-Markdown content
+        // asset is written. An asset-only add/rename needs no second trigger.
+        // Deletions can be ignored by its watcher, so retain explicit escalation
+        // when the structural update has no such native content write.
+        let native_asset_write = changed_publication.iter().any(|path| {
+            path.starts_with(CONTENT_DIR)
+                && path.extension().is_none_or(|extension| extension != "md")
+                && self.stage.join(path).is_file()
+        });
+        self.render_pending |= global_semantics_changed || static_refresh
+            || (structural_content_change && !native_asset_write);
+        let published = crate::publication::publish(&self.stage, &self.live, &changed_publication)
+            .whatever_context("unable to publish validated generation; update may be partial, retry pending")?;
+        if self.render_pending {
+            crate::zola::request_full_rebuild(&self.live)
+                .whatever_context("unable to request coalesced Zola render; retry pending")?;
+            self.render_pending = false;
         }
+        self.accepted_catalog = candidate_catalog;
+        self.accepted_index = candidate_index;
+        self.accepted_projections = candidate_projections;
+        self.last_good_commit = id;
+        self.pending_publication.clear();
         self.previous_head = stamp.0;
         self.previous_paths = current;
         self.previous_dirty = dirty;
@@ -470,41 +549,53 @@ impl LiveSource {
         self.pending.clear();
         log::info!(
             "published validated serve generation: {} path(s)",
-            publish.len()
+            published
         );
-        Ok(publish.len())
+        Ok(published)
+    }
+}
+
+
+#[cfg(test)]
+pub(crate) mod fixture {
+    use super::*;
+
+    /// Minimal complete WG semantics for lifecycle unit fixtures. No production
+    /// feature flag, empty-registry mode or relaxed proposal parser is involved.
+    pub(crate) fn complete_sources(root: &Path) {
+        use network_upgrades::NetworkUpgradeParserMode;
+        let content = root.join(CONTENT_DIR);
+        std::fs::create_dir_all(&content).unwrap();
+        let write_missing = |number: u32, kind: &str, body: &str| {
+            let path = content.join(format!("{number:05}.md"));
+            if !path.exists() {
+                std::fs::write(path, format!("---\neip: {number}\ntitle: Fixture {number}\nstatus: Draft\ntype: {kind}\ncreated: 2020-01-01\n---\n\n{body}\n")).unwrap();
+            }
+        };
+        write_missing(90099, "Standards Track", "Historical fixture member.");
+        for entry in network_upgrades::transitional_modern_registry().into_iter().chain(network_upgrades::permanent_registry()) {
+            let body = match entry.parser_mode {
+                NetworkUpgradeParserMode::LegacyIncludedList => "### Included EIPs\n\n* [EIP-90099](./90099.md)\n",
+                NetworkUpgradeParserMode::ModernStages => "### Included EIPs\n",
+                _ => "",
+            };
+            write_missing(entry.source_meta_eip, "Meta", body);
+            if let NetworkUpgradeParserMode::ExplicitIncludedMembers(members) = entry.parser_mode {
+                for number in members { write_missing(*number, "Standards Track", "Curated fixture member."); }
+            }
+        }
+    }
+
+    pub(crate) fn prepare(root: &Path, plan: Option<&OnlyRenderPlan>) {
+        let catalog = proposal_catalog::collect_proposal_catalog(&root.join(CONTENT_DIR), plan).unwrap();
+        let index = network_upgrades::collect_network_upgrades(&catalog).unwrap();
+        proposal_metadata::write_proposal_metadata_json_from_catalog(root, "EIPs", &catalog).unwrap();
+        markdown::preprocess_with_network_upgrades(&root.join(CONTENT_DIR), plan, Some(&index)).unwrap();
+        network_upgrades::write_hardforks_index(&root.join(CONTENT_DIR), &index).unwrap();
+        if let Some(plan) = plan { plan.prune_content(&root.join(CONTENT_DIR)).unwrap(); }
     }
 }
 
 #[cfg(test)]
-mod warning_regressions {
-    use super::*;
-
-    #[test]
-    fn warnings_follow_real_raw_meta_changes_not_forced_inventory() {
-        let temp = tempfile::tempdir().unwrap();
-        let root = temp.path();
-        let repo = Repository::init(root).unwrap();
-        std::fs::create_dir(root.join("content")).unwrap();
-        std::fs::write(root.join("content/07568.md"), "Meta body\n").unwrap();
-        std::fs::write(root.join("content/90000.md"), "---\neip: 90000\nnetwork-upgrade: Fixture\n---\nBody\n").unwrap();
-        std::fs::write(root.join("content/00020.md"), "Ordinary body\n").unwrap();
-        let snapshot = || {
-            let mut index = repo.index().unwrap();
-            index.add_all(["*"], git2::IndexAddOption::DEFAULT, None).unwrap();
-            index.write().unwrap();
-            repo.find_tree(index.write_tree().unwrap()).unwrap()
-        };
-        let original = snapshot();
-        assert!(changed_hardfork_meta_eip_paths(&repo, root, &original, &original).unwrap().is_empty());
-        std::fs::write(root.join("content/00020.md"), "Ordinary edit\n").unwrap();
-        let ordinary = snapshot();
-        assert!(changed_hardfork_meta_eip_paths(&repo, root, &original, &ordinary).unwrap().is_empty());
-        std::fs::write(root.join("content/07568.md"), "Real Meta edit\n").unwrap();
-        // Removing an unregistered marker still needs restart advice.
-        std::fs::write(root.join("content/90000.md"), "---\neip: 90000\n---\nBody\n").unwrap();
-        let edited = snapshot();
-        let paths = changed_hardfork_meta_eip_paths(&repo, root, &original, &edited).unwrap();
-        assert_eq!(paths, BTreeSet::from([PathBuf::from("content/07568.md"), PathBuf::from("content/90000.md")]));
-    }
-}
+#[path = "live_semantics_tests.rs"]
+mod semantic_tests;

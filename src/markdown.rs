@@ -22,7 +22,7 @@ use regex::Regex;
 
 use serde::{Deserialize, Serialize};
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeSet, BTreeMap};
 use std::ffi::OsStr;
 use std::fs::read_to_string;
 use std::io::{ErrorKind, Write};
@@ -200,11 +200,11 @@ struct FrontMatter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     template: Option<PathBuf>,
 
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    taxonomies: HashMap<String, Vec<String>>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    taxonomies: BTreeMap<String, Vec<String>>,
 
-    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
-    extra: HashMap<String, Value>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    extra: BTreeMap<String, Value>,
 }
 
 fn default_true() -> bool {
@@ -1392,6 +1392,13 @@ fn process_assets(
 ) -> Result<(), Whatever> {
     let canon_root = std::fs::canonicalize(root).whatever_context("could not canonicalize root")?;
     let assets_dir = path.join("assets");
+    // A bundle can contain only index.md. Missing optional assets at startup
+    // are not a missing selected proposal or a malformed asset subtree.
+    match std::fs::symlink_metadata(&assets_dir) {
+        Err(error) if error.kind() == ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error).whatever_context("unable to inspect bundle assets"),
+        Ok(_) => {},
+    }
 
     let mut entries = Vec::new();
     let mut ignored_missing_path = false;
@@ -3114,5 +3121,16 @@ mod containment_regressions {
         write_file(&content, &path, FrontMatter::default(), "GENERATED").unwrap();
         assert_eq!(std::fs::read_to_string(&victim).unwrap(), "EXTERNAL");
         assert!(std::fs::read_to_string(path).unwrap().contains("GENERATED"));
+    }
+}
+
+#[cfg(test)]
+mod empty_bundle_assets_regression {
+    #[test]
+    fn bare_proposal_bundle_does_not_require_an_assets_directory_at_startup() {
+        let temp = tempfile::tempdir().unwrap();
+        let bundle = temp.path().join("90001");
+        std::fs::create_dir(&bundle).unwrap();
+        super::process_assets(temp.path(), &bundle, None, super::MissingPathMode::Error).unwrap();
     }
 }
