@@ -77,20 +77,28 @@ fn handle_request(output_path: &Path, request: Request) -> Result<(), Whatever> 
         return Ok(());
     };
 
-    let Some((path, file)) = open_preview_asset(output_path, paths)? else {
-        request
-            .respond(Response::empty(StatusCode(404)))
-            .whatever_context("unable to send preview not found response")?;
-        return Ok(());
-    };
-
-    // The opened file remains valid if a build is subsequently promoted. Refuse
-    // a race where URL resolution and opening crossed completed generations.
+    let asset = open_preview_asset(output_path, paths);
+    // Check even the open/error/404 cases: promotion can temporarily remove the
+    // root. That must not terminate the long-running preview server.
     if BuildInfo::read(output_path).ok().as_ref() != Some(&info) {
         request.respond(Response::empty(StatusCode(503)))
             .whatever_context("unable to report completed build transition")?;
         return Ok(());
     }
+    let (path, file) = match asset {
+        Ok(Some(asset)) => asset,
+        Ok(None) => {
+            request.respond(Response::empty(StatusCode(404)))
+                .whatever_context("unable to send preview not found response")?;
+            return Ok(());
+        }
+        Err(error) => {
+            log::warn!("unable to open preview asset: {error}");
+            request.respond(Response::empty(StatusCode(503)))
+                .whatever_context("unable to report unavailable preview asset")?;
+            return Ok(());
+        }
+    };
     let response = if let Some(value) = content_type(&path) {
         Response::from_file(file).with_header(content_type_header(value))
     } else {
@@ -137,6 +145,8 @@ fn open_preview_asset(
             }
             Err(error) => return Err(error).whatever_context("unable to resolve preview asset"),
         };
+        // Also hide normalized paths and symlink aliases to the private receipt.
+        if path == root.join(RECEIPT) { continue; }
         // Do not open special files such as FIFOs, which can block the server.
         if !std::fs::metadata(&path)
             .whatever_context("unable to inspect preview asset")?
@@ -405,6 +415,19 @@ mod mount_regressions {
                 assert_eq!(strip_mount(&format!("{}-other/20/", mount.trim_end_matches('/')), mount), None);
             }
             assert_eq!(strip_mount(&format!("{mount}{RECEIPT}"), mount), None);
+        }
+    }
+}
+
+#[cfg(test)]
+mod receipt_privacy_regression {
+    use super::*;
+    #[test]
+    fn normalized_receipt_routes_are_not_public_assets() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::write(temp.path().join(RECEIPT), "private receipt").unwrap();
+        for url in [format!("/{RECEIPT}"), format!("/./{RECEIPT}"), format!("//{RECEIPT}")] {
+            assert!(open_preview_asset(temp.path(), resolve_request_paths(temp.path(), &url).unwrap()).unwrap().is_none());
         }
     }
 }
