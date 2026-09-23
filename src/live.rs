@@ -614,11 +614,14 @@ impl LiveSource {
                 && path.extension().is_none_or(|extension| extension != "md")
                 && self.stage.join(path).is_file()
         });
-        let explicit_refresh = global_semantics_changed || static_refresh || bundle_refresh;
-        // Keep the native render intent until ALL publication succeeds. If an
-        // asset was installed before a later file failed, source reversion or
-        // retry must still request a render of the repaired complete input.
-        let needs_render = retry_render || explicit_refresh || structural_content_change;
+        let explicit_refresh = global_semantics_changed || static_refresh;
+        // Keep the native render intent until ALL publication succeeds. Bundle
+        // output invalidation creates a repair obligation, but a successful
+        // replacement asset write already makes Zola perform the full render.
+        // Only add our explicit trigger when that native render is unavailable,
+        // or when an earlier failed attempt left a pending repair obligation.
+        let needs_render =
+            retry_render || explicit_refresh || structural_content_change || bundle_refresh;
         self.render_pending |= needs_render;
         let published = crate::publication::publish(&self.stage, &self.live, &changed_publication)
             .whatever_context(
