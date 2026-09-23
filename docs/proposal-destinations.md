@@ -17,7 +17,11 @@ Hardfork data carries `meta = { local_route?, public_url }` and member rows carr
 `destination = { local_route?, public_url }`. Proposal membership front matter uses
 the same `meta` shape. The paired theme resolves local routes with `get_url` exactly
 once; an omitted target uses `public_url` directly. It never feeds a deployment-prefixed
-path to `get_url`. Markdown links to selected sources keep Zola source validation.
+path to `get_url`. Ordinary Markdown links to selected sources keep Zola source validation.
+Zola treats queries on `@/file.md?query` as part of the source filename. For query-
+bearing links, the preprocessor validates the source/asset and emits a relative
+owned proposal/asset rendered route instead; the browser applies the deployment
+prefix once. Query and fragment bytes are then appended unchanged.
 
 Official page fallback is `https://eips.ethereum.org/EIPS/eip-N` or
 `https://ercs.ethereum.org/ERCS/erc-N`. Official assets live under `/assets/eip-N/`

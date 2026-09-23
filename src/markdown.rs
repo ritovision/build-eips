@@ -1066,6 +1066,7 @@ fn resolve_asset_link_rewrite(
     source_md_path: &Path,
     only_plan: Option<&OnlyRenderPlan>,
     iri_path: &str,
+    query_present: bool,
 ) -> Result<Option<AssetLinkRewrite>, Whatever> {
     if iri_path.is_empty() {
         return Ok(None);
@@ -1086,7 +1087,7 @@ fn resolve_asset_link_rewrite(
 
         if plan.has_proposal_asset(&asset_path.content_relative_asset_path) {
             validate_local_proposal_asset(root, source_md_path, iri_path, &asset_path)?;
-            return local_asset_link_rewrite(root, source_md_path, asset_path).map(Some);
+            return local_asset_link_rewrite(root, source_md_path, asset_path, query_present).map(Some);
         }
 
         snafu::whatever!(
@@ -1097,7 +1098,7 @@ fn resolve_asset_link_rewrite(
     }
 
     validate_local_proposal_asset(root, source_md_path, iri_path, &asset_path)?;
-    local_asset_link_rewrite(root, source_md_path, asset_path).map(Some)
+    local_asset_link_rewrite(root, source_md_path, asset_path, query_present).map(Some)
 }
 
 fn validate_local_proposal_asset(
@@ -1121,8 +1122,12 @@ fn local_asset_link_rewrite(
     root: &Path,
     source_md_path: &Path,
     asset_path: ProposalAssetPath,
+    query_present: bool,
 ) -> Result<AssetLinkRewrite, Whatever> {
-    if asset_path.kind == ProposalAssetKind::Markdown {
+    // Zola's @/ resolver treats a query as part of the source filename. Keep
+    // ordinary Markdown links in that resolver, but use the already validated
+    // rendered destination when a query needs preserving.
+    if asset_path.kind == ProposalAssetKind::Markdown && !query_present {
         return Ok(AssetLinkRewrite::FallThrough);
     }
 
@@ -1172,7 +1177,7 @@ fn fix_links<'a, 'b>(
             }
 
             let iri_path: &str = iri_ref.path().as_ref();
-            match resolve_asset_link_rewrite(root, source_md_path, only_plan, iri_path)? {
+            match resolve_asset_link_rewrite(root, source_md_path, only_plan, iri_path, iri_ref.query().is_some())? {
                 Some(AssetLinkRewrite::Rewrite(url)) => {
                     *dest_url = CowStr::from(append_query_and_fragment(url, &iri_ref));
                     return Ok(e);
@@ -1224,6 +1229,23 @@ fn fix_links<'a, 'b>(
             {
                 *dest_url =
                     CowStr::from(append_query_and_fragment(public_url.to_owned(), &iri_ref));
+                return Ok(e);
+            }
+
+            if iri_ref.query().is_some() {
+                // canonicalize_md above still rejects missing sources. Resolve
+                // only the owned proposal/asset routes relative to this rendered
+                // page, so the browser applies any deployment prefix once.
+                let canonical_root = std::fs::canonicalize(root)
+                    .whatever_context("could not canonicalize Markdown content root")?;
+                let target_relative = canonicalized.strip_prefix(&canonical_root)
+                    .whatever_context("Markdown query target is outside content root")?;
+                let source_relative = source_md_path.strip_prefix(root)
+                    .whatever_context("Markdown query source is outside content root")?;
+                let target_route = absolute_rendered_path_for_content_path(target_relative)?;
+                let source_route = absolute_rendered_path_for_content_path(source_relative)?;
+                let url = relative_url_from_rendered_paths(&source_route, &target_route)?;
+                *dest_url = CowStr::from(append_query_and_fragment(url, &iri_ref));
                 return Ok(e);
             }
 
@@ -2148,6 +2170,28 @@ mod tests {
 
         let body = rendered_body(&content.join("00555.md"));
         assert!(body.contains("![diagram](../678/assets/diagram.png)"));
+    }
+
+    #[test]
+    fn selected_markdown_queries_use_validated_rendered_routes() {
+        for targeted in [false, true] {
+            let (_temp, content) = content_repo(&[
+                ("00555.md", proposal_markdown(555, None, "",
+                    "[page](./00678/index.md?q=a%26b#abstract)\n[asset](./00678/assets/guide%20name.md?q=a%26b#abstract)\n[normal](./00678/index.md#abstract)")),
+                ("00678/index.md", proposal_markdown(678, None, "", "## Abstract\n\nTarget.")),
+                ("00678/assets/guide name.md", "# Abstract\n\nGuide.".to_owned()),
+            ]);
+            let plan = targeted.then(|| only_plan(&content, &[555, 678]));
+            preprocess(&content, plan.as_ref()).unwrap();
+            let body = rendered_body(&content.join("00555.md"));
+            assert!(body.contains("[page](../678/?q=a%26b#abstract)"), "{body}");
+            assert!(body.contains("[asset](../678/assets/guide%20name/?q=a%26b#abstract)"), "{body}");
+            assert!(body.contains("[normal](@/00678/index.md#abstract)"), "{body}");
+        }
+        let (_temp, content) = content_repo(&[
+            ("00555.md", proposal_markdown(555, None, "", "[missing](./00678.md?q=1#abstract)")),
+        ]);
+        assert!(preprocess(&content, None).is_err());
     }
 
     #[test]
