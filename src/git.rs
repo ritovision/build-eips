@@ -45,6 +45,13 @@ pub enum Error {
         source: git2::Error,
         backtrace: Backtrace,
     },
+    #[snafu(display(
+        "Windows Git source path length limit exceeded; move the source checkout to a shorter directory. For generated output paths, select a shorter --build-root. No global Git or Windows registry change is required"
+    ))]
+    NativeSourcePathTooLong {
+        source: git2::Error,
+        backtrace: Backtrace,
+    },
     #[snafu(display("{message}"))]
     Dirty {
         message: String,
@@ -644,9 +651,19 @@ fn dirty_statuses(repo: &git2::Repository) -> Result<git2::Statuses<'_>, Error> 
         .recurse_untracked_dirs(true)
         .renames_head_to_index(true)
         .renames_index_to_workdir(true);
-    repo.statuses(Some(&mut options)).context(GitSnafu {
-        what: "get root repository status",
-    })
+    repo.statuses(Some(&mut options))
+        .map_err(source_status_error)
+}
+
+fn source_status_error(source: git2::Error) -> Error {
+    if cfg!(windows) && source.message().contains("path too long") {
+        NativeSourcePathTooLongSnafu.into_error(source)
+    } else {
+        GitSnafu {
+            what: "get root repository status",
+        }
+        .into_error(source)
+    }
 }
 
 fn format_dirty_rejection(tracked_paths: &BTreeSet<PathBuf>, untracked_count: usize) -> String {
@@ -2415,6 +2432,33 @@ mod tests {
         assert_eq!(
             std::fs::read_to_string(destination.join("keep")).unwrap(),
             "sentinel"
+        );
+    }
+}
+
+#[cfg(test)]
+mod source_path_diagnostic_tests {
+    use super::*;
+    #[test]
+    fn source_length_diagnostic_preserves_the_git_cause_and_names_the_workaround() {
+        let error =
+            source_status_error(git2::Error::from_str("path too long: source/proposal.pdf"));
+        if cfg!(windows) {
+            assert!(error
+                .to_string()
+                .contains("move the source checkout to a shorter directory"));
+            assert!(error.to_string().contains("--build-root"));
+        } else {
+            assert_eq!(error.to_string(), "unable to get root repository status");
+        }
+        assert!(std::error::Error::source(&error)
+            .unwrap()
+            .to_string()
+            .contains("source/proposal.pdf"));
+        let unrelated = source_status_error(git2::Error::from_str("fixture status error"));
+        assert_eq!(
+            unrelated.to_string(),
+            "unable to get root repository status"
         );
     }
 }

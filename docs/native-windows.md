@@ -22,6 +22,12 @@ build-eips -C C:\work\EIPs --build-root C:\builds\eips build
 
 Keep the build root outside the authored source directories. A shorter path is an explicit environment workaround, not a replacement for failed platform acceptance.
 
+### Source-checkout depth limitation
+
+The internal-checkout long-path setting does not change authored repositories. On Git for Windows configurations where source-repository long-path support is disabled, a deeply nested source checkout can exceed libgit2's status-path limit before a build begins. The preprocessor retains the underlying Git path error and explains that the **source checkout itself** must move to a shorter directory. Changing only `--build-root` cannot repair an overlong source path.
+
+The native acceptance matrix uses short disposable source roots with ordinary CRLF settings, while deliberately keeping generated build roots deep enough to exercise long internal paths. A separate overlong-source attempt is retained as limitation evidence. No global Git configuration or registry changes are made. Fully transparent long-path support for arbitrary authored checkout locations is not claimed.
+
 ## Reproducible checks
 
 ```powershell
