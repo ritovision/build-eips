@@ -131,6 +131,10 @@ impl LiveTheme {
         let output = crate::layout::serve_output_path(self.config.owned_root.parent().unwrap());
         let changed = crate::publication::changed_paths(&self.stage, &self.config.mounted_theme_dir, &affected)
             .whatever_context("unable to compare theme publication; retry pending")?;
+        let retry_render = self.render_pending;
+        // A later failure may follow an earlier output removal. Preserve a
+        // render obligation even when source reversion makes publication empty.
+        self.render_pending |= !changed.is_empty();
         let refresh = crate::zola::prepare_static_output(&self.stage, &output, &changed)
             .whatever_context("unable to invalidate theme static output; retry pending")?;
         self.render_pending |= refresh;
@@ -138,11 +142,11 @@ impl LiveTheme {
             .whatever_context(
                 "unable to publish theme generation; update may be partial, retry pending",
             )?;
-        if self.render_pending {
+        if retry_render || refresh {
             crate::zola::request_full_rebuild(&self.config.owned_root)
                 .whatever_context("unable to refresh theme output; retry pending")?;
-            self.render_pending = false;
         }
+        self.render_pending = false;
         self.previous_paths = snapshot.paths.clone();
         self.previous = Some(snapshot);
         self.pending.clear();

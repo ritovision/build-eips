@@ -228,3 +228,37 @@ fn partial_native_asset_publication_preserves_render_intent_through_source_rever
     assert!(!fixture.live.join(asset).exists());
     assert_ne!(std::fs::read(config).unwrap(), initial_config);
 }
+
+#[cfg(unix)]
+#[test]
+fn partial_static_output_invalidation_requires_a_render_even_when_source_reverts() {
+    use std::os::unix::fs::PermissionsExt;
+    let fixture = Fixture::new(false);
+    let mut state = fixture.state();
+    let a = "static/phase5-output-a/item.txt";
+    let z = "static/phase5-output-z/item.txt";
+    for path in [a, z] { fixture.write(path, "accepted"); fixture.stage(path); }
+    state.synchronize().unwrap();
+    let output = crate::layout::serve_output_path(fixture.live.parent().unwrap());
+    let output_a = output.join("phase5-output-a/item.txt");
+    let output_z = output.join("phase5-output-z/item.txt");
+    for path in [&output_a, &output_z] {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, "accepted").unwrap();
+    }
+    let config = crate::layout::theme_config_path(&crate::layout::mounted_theme_path(&fixture.live));
+    let before = std::fs::read(&config).unwrap();
+    let permissions = std::fs::metadata(output_z.parent().unwrap()).unwrap().permissions();
+    std::fs::set_permissions(output_z.parent().unwrap(), std::fs::Permissions::from_mode(0o555)).unwrap();
+    for path in [a, z] { std::fs::remove_file(fixture.source.join(path)).unwrap(); }
+    let result = state.synchronize();
+    std::fs::set_permissions(output_z.parent().unwrap(), permissions).unwrap();
+    assert!(result.is_err());
+    assert!(!output_a.exists(), "the earlier output removal must really have happened");
+    assert!(output_z.exists());
+    assert!(state.needs_publication_retry());
+    for path in [a, z] { fixture.write(path, "accepted"); }
+    state.synchronize().unwrap();
+    assert!(!state.needs_publication_retry());
+    assert_ne!(std::fs::read(config).unwrap(), before, "repaired accepted input must request restoration of partially invalidated output");
+}

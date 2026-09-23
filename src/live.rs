@@ -516,6 +516,10 @@ impl LiveSource {
         let changed_publication = crate::publication::changed_paths(&self.stage, &self.live, &publish)
             .whatever_context("unable to compare publication; retry pending")?;
         let output = crate::layout::serve_output_path(self.live.parent().unwrap());
+        let retry_render = self.render_pending;
+        // Output normalization itself can be partially destructive before it
+        // reports failure. Reserve repair intent BEFORE entering that boundary.
+        self.render_pending |= changed_publication.iter().any(|path| path.starts_with("static"));
         let static_refresh = crate::zola::prepare_static_output(&self.stage, &output, &changed_publication)
             .whatever_context("unable to invalidate stale static output; retry pending")?;
         // Zola already performs a full render when a non-Markdown content
@@ -527,15 +531,15 @@ impl LiveSource {
                 && path.extension().is_none_or(|extension| extension != "md")
                 && self.stage.join(path).is_file()
         });
-        let retry_render = self.render_pending;
         let explicit_refresh = global_semantics_changed || static_refresh;
         // Keep the native render intent until ALL publication succeeds. If an
         // asset was installed before a later file failed, source reversion or
         // retry must still request a render of the repaired complete input.
-        self.render_pending |= explicit_refresh || structural_content_change;
+        let needs_render = retry_render || explicit_refresh || structural_content_change;
+        self.render_pending |= needs_render;
         let published = crate::publication::publish(&self.stage, &self.live, &changed_publication)
             .whatever_context("unable to publish validated generation; update may be partial, retry pending")?;
-        if self.render_pending && (retry_render || explicit_refresh || !native_asset_write) {
+        if needs_render && (retry_render || explicit_refresh || !native_asset_write) {
             crate::zola::request_full_rebuild(&self.live)
                 .whatever_context("unable to request coalesced Zola render; retry pending")?;
         }

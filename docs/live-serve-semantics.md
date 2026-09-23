@@ -83,8 +83,12 @@ reported explicitly as uncertain; the accepted semantic generation does not
 advance. The watcher retries pending publication without requiring another
 source edit. Pending prepared paths and render intent survive the failure, so
 both a retry of the candidate and a reversion to accepted raw source repair
-partially installed projections. Accepted semantic state advances only after
-preprocessor validation, publication, and any required render request succeed.
+partially installed projections. Repair intent is reserved before potentially
+destructive static-output normalization as well: when normalization removes an
+output and then fails, source reversion can leave prepared bytes unchanged but
+still requires Zola to restore that output. Both source and theme retry paths
+retain this obligation. Accepted semantic state advances only after preprocessor
+validation, publication, and any required render request succeed.
 
 That acceptance is **not** a promise that Zola has finished rendering, nor a
 versioned HTTP snapshot. Zola errors remain visible in process diagnostics. A
@@ -106,3 +110,7 @@ followed by source reversion. `src/publication.rs` tests safe leaf replacement
 and directory/file transitions. Coordination acceptance in `check-phase5.py`
 exercises the real binary, complete WG source universe, production theme,
 watcher, persistent Zola process, and HTTP-rendered surfaces.
+
+The supplemental coordination `check-phase5-output-recovery.py` exercises real
+partial output invalidation and HTTP restoration after accepted-source reversion
+for both active-source and local-theme changes.
