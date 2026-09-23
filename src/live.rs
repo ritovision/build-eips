@@ -135,6 +135,12 @@ impl LiveSource {
         configuration: crate::execution::ConfigurationSnapshot,
         repository_title: &str,
     ) -> Result<Self, Whatever> {
+        #[cfg(windows)]
+        let scratch = tempfile::Builder::new()
+            .prefix(".serve-generation-")
+            .tempdir()
+            .whatever_context("unable to create private live staging directory")?;
+        #[cfg(not(windows))]
         let scratch = tempfile::Builder::new()
             .prefix(".serve-generation-")
             .tempdir_in(

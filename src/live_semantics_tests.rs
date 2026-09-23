@@ -110,6 +110,10 @@ fn private_live_clone_enables_long_paths_without_changing_source_config() {
     let source_config = std::fs::read(fixture.source.join(".git/config")).unwrap();
     let live_config = std::fs::read(fixture.live.join(".git/config")).unwrap();
     let state = fixture.state();
+    assert!(
+        !state.stage.starts_with(fixture.live.parent().unwrap()),
+        "private live staging must not inherit a potentially long build-root path"
+    );
     let staged = Repository::open(&state.stage).unwrap();
     assert!(staged.config().unwrap().get_bool("core.longpaths").unwrap());
     assert_eq!(
