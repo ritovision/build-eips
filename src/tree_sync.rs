@@ -135,6 +135,18 @@ impl Plan {
         })
     }
 
+    pub(crate) fn source_leaf_supersedes(&self, path: &Path) -> bool {
+        self.files
+            .iter()
+            .any(|leaf| leaf != path && path.starts_with(leaf))
+    }
+
+    pub(crate) fn removes_destination_ancestor(&self, path: &Path) -> bool {
+        self.removals
+            .iter()
+            .any(|ancestor| ancestor != path && path.starts_with(ancestor))
+    }
+
     pub(crate) fn prepare_destination(&self, destination: &Path) -> io::Result<()> {
         self.prepare_destination_inner(destination, false)
     }

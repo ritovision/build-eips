@@ -19,9 +19,23 @@ pub(crate) fn changed_paths(
     destination: &Path,
     paths: &BTreeSet<PathBuf>,
 ) -> io::Result<BTreeSet<PathBuf>> {
+    // Comparison must use the same transition plan as publication: inspecting
+    // an obsolete child through a source leaf or an installed destination link
+    // would reject a valid planned replacement (or follow the wrong tree).
+    let plan = crate::tree_sync::Plan::new(source, destination, paths)?;
     let mut changed = BTreeSet::new();
     for path in paths {
-        if !same_file(source, destination, path)? {
+        if plan.source_leaf_supersedes(path) {
+            continue;
+        }
+        if plan.removes_destination_ancestor(path) {
+            // The ancestor removal handles obsolete descendants. New source
+            // descendants are compared against absence without walking the
+            // currently installed link/file ancestor in the destination.
+            if crate::tree_sync::inspect(source, path)?.is_some() {
+                changed.insert(path.clone());
+            }
+        } else if !same_file(source, destination, path)? {
             changed.insert(path.clone());
         }
     }
@@ -182,5 +196,75 @@ mod tests {
             Path::new("target")
         );
         assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
+    }
+    #[cfg(unix)]
+    #[test]
+    fn scheduled_link_directory_transitions_compare_publish_and_retry_without_following_links() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("live");
+        let outside = temp.path().join("outside");
+        write(&source, "static/item/child", "new child");
+        write(&outside, "sentinel", "keep");
+        fs::create_dir_all(destination.join("static")).unwrap();
+        symlink(&outside, destination.join("static/item")).unwrap();
+        let paths = BTreeSet::from([
+            PathBuf::from("static/item"),
+            PathBuf::from("static/item/child"),
+        ]);
+        assert_eq!(changed_paths(&source, &destination, &paths).unwrap(), paths);
+        let permissions = fs::metadata(destination.join("static"))
+            .unwrap()
+            .permissions();
+        fs::set_permissions(
+            destination.join("static"),
+            fs::Permissions::from_mode(0o555),
+        )
+        .unwrap();
+        let failure = publish(&source, &destination, &paths);
+        fs::set_permissions(destination.join("static"), permissions).unwrap();
+        assert!(
+            failure.is_err(),
+            "the fault must prevent removal of the installed link"
+        );
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 2);
+        assert_eq!(
+            fs::read_to_string(destination.join("static/item/child")).unwrap(),
+            "new child"
+        );
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
+        assert_eq!(
+            fs::read_to_string(outside.join("sentinel")).unwrap(),
+            "keep"
+        );
+        assert!(!outside.join("child").exists());
+        fs::remove_dir_all(source.join("static/item")).unwrap();
+        symlink("payload.txt", source.join("static/item")).unwrap();
+        let leaf = BTreeSet::from([PathBuf::from("static/item")]);
+        assert_eq!(changed_paths(&source, &destination, &paths).unwrap(), leaf);
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 1);
+        assert_eq!(
+            fs::read_link(destination.join("static/item")).unwrap(),
+            Path::new("payload.txt")
+        );
+        assert_eq!(publish(&source, &destination, &paths).unwrap(), 0);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn comparison_still_rejects_an_unplanned_source_link_ancestor() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("live");
+        let outside = temp.path().join("outside");
+        write(&outside, "child", "must not read through link");
+        fs::create_dir(&source).unwrap();
+        fs::create_dir(&destination).unwrap();
+        std::os::unix::fs::symlink(&outside, source.join("link")).unwrap();
+        let paths = BTreeSet::from([PathBuf::from("link/child")]);
+        assert!(changed_paths(&source, &destination, &paths).is_err());
+        assert!(publish(&source, &destination, &paths).is_err());
+        assert!(!destination.join("link").exists());
     }
 }
