@@ -587,6 +587,9 @@ pub(crate) mod fixture {
     }
 
     pub(crate) fn prepare(root: &Path, plan: Option<&OnlyRenderPlan>) {
+        let config = crate::layout::theme_config_path(&crate::layout::mounted_theme_path(root));
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        std::fs::write(config, "base_url=\"https://example.com/\"\n").unwrap();
         let catalog = proposal_catalog::collect_proposal_catalog(&root.join(CONTENT_DIR), plan).unwrap();
         let index = network_upgrades::collect_network_upgrades(&catalog).unwrap();
         proposal_metadata::write_proposal_metadata_json_from_catalog(root, "EIPs", &catalog).unwrap();

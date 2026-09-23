@@ -155,9 +155,6 @@ pub(crate) fn prepare_static_output(
 
 pub(crate) fn request_full_rebuild(project: &Path) -> std::io::Result<()> {
     let config = theme_config_path(&crate::layout::mounted_theme_path(project));
-    if !config.exists() {
-        return Ok(());
-    } // isolated non-Zola unit fixtures
     let resolved = config.canonicalize()?;
     crate::generated_fs::check_path(&project.canonicalize()?, &resolved, false)?;
     // Zola ignores mtime-only notifications. A changed comment in the mounted
@@ -594,5 +591,30 @@ mod diagnostic_regressions {
         let text = error.to_string();
         assert!(text.contains("zola check failed"), "{text}");
         assert!(text.contains("missing.md"), "{text}");
+    }
+}
+
+#[cfg(test)]
+mod live_render_request_regressions {
+    #[test]
+    fn missing_config_is_not_a_successful_render_request() {
+        let project = tempfile::tempdir().unwrap();
+        assert!(super::request_full_rebuild(project.path()).is_err());
+    }
+
+    #[test]
+    fn repeated_requests_change_bytes_without_growing_a_comment_history() {
+        let project = tempfile::tempdir().unwrap();
+        let config = super::theme_config_path(&crate::layout::mounted_theme_path(project.path()));
+        std::fs::create_dir_all(config.parent().unwrap()).unwrap();
+        let original = "base_url = \"https://example.com\"\n";
+        std::fs::write(&config, original).unwrap();
+        super::request_full_rebuild(project.path()).unwrap();
+        let first = std::fs::read_to_string(&config).unwrap();
+        super::request_full_rebuild(project.path()).unwrap();
+        let second = std::fs::read_to_string(&config).unwrap();
+        assert_ne!(first, second);
+        assert!(second.starts_with(original));
+        assert_eq!(second.matches("# build-eips live render request:").count(), 1);
     }
 }
