@@ -1,6 +1,6 @@
-# Preprocessor Module And Test Ownership
+# build-eips Module And Test Ownership
 
-This file documents how the preprocessor crate is organized: which module owns each behavior, where tests should live, and how to keep module boundaries reviewable. It is for contributors and maintainers, not end-user documentation.
+This file documents how the `build-eips` crate is organized: which module owns each behavior, where tests should live, and how to keep module boundaries reviewable. It is for contributors and maintainers, not end-user documentation.
 
 ## Module Ownership
 

@@ -29,7 +29,7 @@ fn write_file(root: &Path, relative: &str, contents: &str) {
 fn request(output_path: PathBuf, enabled: bool, format: SearchCorpusFormat) -> SearchCorpusRequest {
     SearchCorpusRequest {
         output_path,
-        base_url: Url::parse("https://eips-wg.github.io/EIPs/").unwrap(),
+        base_url: Url::parse("https://example.test/EIPs/").unwrap(),
         source: fixture_source(),
         config: SearchCorpusConfig { enabled, format },
     }
@@ -510,7 +510,7 @@ fn corpus_uses_url_and_heading_fallbacks_when_metadata_or_ids_are_absent() {
 pub(super) fn fixture_source() -> crate::search::CorpusSource {
     crate::search::CorpusSource {
         product: "EIPs".into(),
-        base_url: "https://eips-wg.github.io/EIPs/".into(),
+        base_url: "https://example.test/EIPs/".into(),
         source_mode: "dirty".into(),
         source_head: "fixture".into(),
         materialized_head: "fixture".into(),

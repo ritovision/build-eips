@@ -2,7 +2,7 @@
 
 set -eu
 
-DEFAULT_ACTIVE_REPO_URL=https://github.com/ethereum/EIPs.git
+DEFAULT_ACTIVE_REPO_URL=https://github.com/ritovision/EIPs-WG.git
 
 say() {
     printf '%s\n' "$*"
@@ -458,7 +458,7 @@ done
 
 INVOCATION_DIR=$(pwd)
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-PREPROCESSOR_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+BUILD_EIPS_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
 INSTALL_DIR=
 PATH_NOTES=
 TMPDIR_TO_CLEAN=
@@ -467,7 +467,7 @@ INSTALL_TMP_TO_CLEAN=
 if [ -n "${WORKSPACE_ROOT:-}" ]; then
     WORKSPACE_ROOT=$(absolute_path "$WORKSPACE_ROOT")
 else
-    WORKSPACE_ROOT=$(CDPATH= cd -- "$PREPROCESSOR_ROOT/.." && pwd)
+    WORKSPACE_ROOT=$(CDPATH= cd -- "$BUILD_EIPS_ROOT/.." && pwd)
 fi
 if [ -d "$WORKSPACE_ROOT" ]; then
     WORKSPACE_ROOT=$(CDPATH= cd -- "$WORKSPACE_ROOT" && pwd)
@@ -482,7 +482,7 @@ else
 fi
 
 ensure_active_repo_root
-BUILD_EIPS=$PREPROCESSOR_ROOT/target/debug/build-eips
+BUILD_EIPS=$BUILD_EIPS_ROOT/target/debug/build-eips
 
 say "Workspace root: $WORKSPACE_ROOT"
 say "Active proposal repo: $ACTIVE_REPO_ROOT"
@@ -491,13 +491,13 @@ say "Local build-eips: $BUILD_EIPS"
 command -v cargo >/dev/null 2>&1 || die "need cargo to build local build-eips. Install Rust from https://rustup.rs/ and re-run this script."
 
 say "Building local build-eips"
-if ! (CDPATH= cd -- "$PREPROCESSOR_ROOT" && cargo build); then
+if ! (CDPATH= cd -- "$BUILD_EIPS_ROOT" && cargo build); then
     die "cargo build failed"
 fi
 
 [ -x "$BUILD_EIPS" ] || die "local build-eips was not built at $BUILD_EIPS"
 
-TARGET_DEBUG_DIR=$PREPROCESSOR_ROOT/target/debug
+TARGET_DEBUG_DIR=$BUILD_EIPS_ROOT/target/debug
 move_dir_to_front_of_script_path "$TARGET_DEBUG_DIR"
 
 ensure_zola
@@ -544,7 +544,7 @@ fi
 
 say ""
 say "Next commands:"
-say "  cd $(shell_quote "$PREPROCESSOR_ROOT")"
+say "  cd $(shell_quote "$BUILD_EIPS_ROOT")"
 say "  cargo test"
 say "  $(shell_quote "$BUILD_EIPS") -C $(shell_quote "$ACTIVE_REPO_ROOT") check"
 say "  $(shell_quote "$BUILD_EIPS") -C $(shell_quote "$ACTIVE_REPO_ROOT") build"

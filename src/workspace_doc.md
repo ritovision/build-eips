@@ -1,6 +1,6 @@
 # build-eips Workspace
 
-This guide is generated as `WORKSPACE.md` by `build-eips init`. Its source lives in the preprocessor repository at `src/workspace_doc.md`.
+This guide is generated as `WORKSPACE.md` by `build-eips init`. Its source lives in the `build-eips` repository at `src/workspace_doc.md`.
 
 A workspace brings proposal repositories, an editable local theme, generated build output, and workspace-local settings into one predictable layout. Run commands from an active proposal repository such as `EIPs/` or `ERCs/`, or anchor them with `-C` from the workspace root.
 
@@ -23,7 +23,7 @@ Optional setup flags can add more repositories:
 ```text
 EIPs-project/
 ├── template/       # --template
-├── preprocessor/   # --platform-dev
+├── build-eips/     # --platform-dev
 └── eipw/           # --platform-dev
 ```
 
@@ -33,7 +33,7 @@ EIPs-project/
 - `EIPs/` and `ERCs/`: proposal source repositories in this example workspace.
 - `theme/`: editable workspace-local Zola theme used by runtime and editorial commands.
 - `template/`: optional proposal template repository.
-- `preprocessor/`: optional local `build-eips` development checkout.
+- `build-eips/`: optional local `build-eips` development checkout.
 - `eipw/`: optional local `eipw` development checkout.
 
 The active proposal repository must contain a valid `Build.toml`. Its `name` and `locations` define the managed workspace names and sibling repositories. Its `[theme]` metadata supplies the repository and pin used only when `init` creates a missing `workspace/theme` checkout.
@@ -94,7 +94,7 @@ If a fresh shell cannot find `build-eips` or Zola, rerun the setup script or app
 
 If a sibling repository, `theme/`, or optional platform repository is missing, rerun `build-eips init` with the needed flags. If doctor reports a theme pin mismatch, the checkout is still usable for local theme development; the warning means it differs from the active manifest pin.
 
-If `theme/` or `preprocessor/` setup cannot create the active proposal checkout, check that Git is installed and that the workspace path does not already exist as a non-git directory. Set `ACTIVE_REPO_ROOT` when setup should use an existing manifest-bearing proposal checkout.
+If the `theme/` or `build-eips/` setup script cannot create the active proposal checkout, check that Git is installed and that the workspace path does not already exist as a non-git directory. Set `ACTIVE_REPO_ROOT` when setup should use an existing manifest-bearing proposal checkout.
 
 If `build-eips doctor` reports that Zola is missing or too old, rerun the setup script to install a supported Zola version.
 

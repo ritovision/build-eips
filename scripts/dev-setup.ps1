@@ -4,7 +4,7 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
-$DefaultActiveRepoUrl = "https://github.com/ethereum/EIPs.git"
+$DefaultActiveRepoUrl = "https://github.com/ritovision/EIPs-WG.git"
 
 function Say {
     param([string]$Message)
@@ -419,18 +419,18 @@ $PathNotes = @()
 
 $InvocationDir = (Get-Location).ProviderPath
 $ScriptDir = (Resolve-Path -LiteralPath $PSScriptRoot).ProviderPath
-$PreprocessorRoot = (Resolve-Path -LiteralPath (Split-Path -Path $ScriptDir -Parent)).ProviderPath
+$BuildEipsRoot = (Resolve-Path -LiteralPath (Split-Path -Path $ScriptDir -Parent)).ProviderPath
 
 if (-not [string]::IsNullOrWhiteSpace($env:WORKSPACE_ROOT)) {
     $WorkspaceRoot = Resolve-ConfiguredPath -PathValue $env:WORKSPACE_ROOT -BaseDir $InvocationDir
 } else {
-    $WorkspaceRoot = (Resolve-Path -LiteralPath (Split-Path -Path $PreprocessorRoot -Parent)).ProviderPath
+    $WorkspaceRoot = (Resolve-Path -LiteralPath (Split-Path -Path $BuildEipsRoot -Parent)).ProviderPath
 }
 
 $ActiveRepoInfo = Resolve-ActiveRepoRoot -InvocationDir $InvocationDir -WorkspaceRoot $WorkspaceRoot
 $ActiveRepoRoot = $ActiveRepoInfo["Path"]
 $ActiveRepoExplicit = $ActiveRepoInfo["Explicit"]
-$BuildEipsPath = Join-Path -Path $PreprocessorRoot -ChildPath "target\debug\build-eips.exe"
+$BuildEipsPath = Join-Path -Path $BuildEipsRoot -ChildPath "target\debug\build-eips.exe"
 
 Say "Workspace root: $WorkspaceRoot"
 Say "Active proposal repo: $ActiveRepoRoot"
@@ -445,7 +445,7 @@ if ($null -eq $cargoCommand) {
 
 Say "Building local build-eips"
 $CargoExitCode = 0
-Push-Location -LiteralPath $PreprocessorRoot
+Push-Location -LiteralPath $BuildEipsRoot
 try {
     & cargo build
     $CargoExitCode = $LASTEXITCODE
@@ -503,7 +503,7 @@ if ($PathNotes.Count -gt 0) {
 
 Say ""
 Say "Next commands:"
-Say ("  cd {0}" -f (ConvertTo-PowerShellQuotedPath -Path $PreprocessorRoot))
+Say ("  cd {0}" -f (ConvertTo-PowerShellQuotedPath -Path $BuildEipsRoot))
 Say "  cargo test"
 Say ("  {0} -C {1} check" -f (ConvertTo-PowerShellQuotedPath -Path $BuildEipsPath), (ConvertTo-PowerShellQuotedPath -Path $ActiveRepoRoot))
 Say ("  {0} -C {1} build" -f (ConvertTo-PowerShellQuotedPath -Path $BuildEipsPath), (ConvertTo-PowerShellQuotedPath -Path $ActiveRepoRoot))

@@ -10,7 +10,7 @@ The system has five layers:
 
 - proposal repositories: canonical proposal content and a repo-owned `Build.toml`
 - local workspace overlay: workspace paths plus `.build-eips.toml` preferences
-- preprocessor orchestration: active manifest loading, source policy, materialization, validation, and runtime handoff
+- `build-eips` orchestration: active manifest loading, source policy, materialization, validation, and runtime handoff
 - disposable prepared state: generated Git worktrees, a mounted local theme, and rendered output under the resolved build root
 - render/output surface: the prepared tree and mounted theme consumed by Zola, plus static output served by preview
 
@@ -18,7 +18,7 @@ The system has five layers:
 
 - An active proposal repository owns `Build.toml` and proposal content. `Build.toml` declares the active name, locations for the active and sibling proposal repositories, each location's published base URL, and the theme repository/pin.
 - The theme repository owns render templates, runtime configuration, styles, assets, and syntax definitions.
-- The preprocessor owns orchestration, source resolution, materialization, preprocessing, validation, and runtime handoff.
+- `build-eips` owns orchestration, source resolution, materialization, preprocessing, validation, and runtime handoff.
 - eipw owns editorial validation rules consumed through Cargo dependencies such as `eipw-lint`, `eipw-preamble`, and `eipw-snippets`.
 - The template repository owns proposal scaffolding.
 
@@ -58,7 +58,7 @@ Base URL precedence for rendering is CLI `--base-url`, then workspace `.build-ei
 
 ## Overlay And Materialization
 
-The preprocessor does not merge source repositories in place. It materializes active and sibling proposal content into a disposable prepared repository, preprocesses markdown there, and mounts the local theme at `themes/eips-theme` for Zola.
+`build-eips` does not merge source repositories in place. It materializes active and sibling proposal content into a disposable prepared repository, preprocesses markdown there, and mounts the local theme at `themes/eips-theme` for Zola.
 
 Tracked dirty active-repository changes are included only in default dirty materialization. Clean materialization rejects dirty or untracked active state. Theme materialization includes tracked local theme files plus tracked or staged theme working-tree changes independently of active-source mode. Serve watches the local active repository when dirty mode is enabled and always watches the local theme checkout when a runtime theme is present.
 
@@ -104,4 +104,4 @@ The system stops before ambiguous prepared state is created:
 
 ## Rollout Boundary
 
-The template repository's legacy manifest is separate repository-owned rollout work. It is not read by the preprocessor's active-manifest loader and is not migrated by preprocessor workspace commands.
+The template repository's legacy manifest is separate repository-owned rollout work. It is not read by the `build-eips` active-manifest loader and is not migrated by `build-eips` workspace commands.

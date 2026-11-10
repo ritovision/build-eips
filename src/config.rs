@@ -1151,7 +1151,7 @@ staging = true
                 "theme".to_owned(),
                 r#"
 [theme]
-repository = "https://github.com/eips-wg/theme.git"
+repository = "https://github.com/ritovision/eips-wg-theme.git"
 "#
                 .to_owned(),
             ),

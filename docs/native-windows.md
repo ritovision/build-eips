@@ -1,6 +1,6 @@
 # Native Windows development
 
-The preprocessor uses native filesystem paths for filesystem operations and forward-slash strings for site routes, Markdown destinations, and aliases. Canonical comparison operands must both be resolved; do not remove the Windows extended-length prefix globally or relax containment checks.
+`build-eips` uses native filesystem paths for filesystem operations and forward-slash strings for site routes, Markdown destinations, and aliases. Canonical comparison operands must both be resolved; do not remove the Windows extended-length prefix globally or relax containment checks.
 
 ## Tools and local execution
 
@@ -26,7 +26,7 @@ Private live-generation clones also enable `core.longpaths` before fetch and che
 
 ### Source-checkout depth limitation
 
-The internal-checkout long-path setting does not change authored repositories. On Git for Windows configurations where source-repository long-path support is disabled, a deeply nested source checkout can exceed libgit2's status-path limit before a build begins. The preprocessor retains the underlying Git path error and explains that the **source checkout itself** must move to a shorter directory. Changing only `--build-root` cannot repair an overlong source path.
+The internal-checkout long-path setting does not change authored repositories. On Git for Windows configurations where source-repository long-path support is disabled, a deeply nested source checkout can exceed libgit2's status-path limit before a build begins. `build-eips` retains the underlying Git path error and explains that the **source checkout itself** must move to a shorter directory. Changing only `--build-root` cannot repair an overlong source path.
 
 The native acceptance matrix uses short disposable source roots with ordinary CRLF settings, while deliberately keeping generated build roots deep enough to exercise long internal paths. A separate overlong-source attempt is retained as limitation evidence. No global Git configuration or registry changes are made. Fully transparent long-path support for arbitrary authored checkout locations is not claimed.
 
@@ -38,7 +38,7 @@ cargo +1.91.1 fmt --all -- --check
 cargo +1.91.1 clippy --locked --all-targets -- -Dwarnings
 cargo +1.91.1 test --locked
 cargo +1.91.1 build --locked --release
-python tests/serve_generation.py --build-eips C:\work\preprocessor\target\release\build-eips.exe --evidence C:\work\scratch\windows-watch
+python tests/serve_generation.py --build-eips C:\work\build-eips\target\release\build-eips.exe --evidence C:\work\scratch\windows-watch
 ```
 
 The watcher runner creates disposable repositories with complete proposal and network-upgrade metadata, checks staging and unstaging, branch switches, linked worktrees, assets, last-good retention, and recovery, and terminates only its own process trees. Its evidence directory must not already exist. Configure its PATH before invoking it; the runner does not change global settings.

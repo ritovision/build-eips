@@ -90,7 +90,7 @@ partially installed projections. Repair intent is reserved before potentially
 destructive static-output normalization as well: when normalization removes an
 output and then fails, source reversion can leave prepared bytes unchanged but
 still requires Zola to restore that output. Both source and theme retry paths
-retain this obligation. Accepted semantic state advances only after preprocessor
+retain this obligation. Accepted semantic state advances only after preprocessing
 validation, publication, and any required render request succeed.
 
 That acceptance is **not** a promise that Zola has finished rendering, nor a

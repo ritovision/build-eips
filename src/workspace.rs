@@ -24,8 +24,9 @@ use crate::{
     git,
 };
 
-const PROPOSAL_TEMPLATE_URL: &str = "https://github.com/eips-wg/template.git";
-const PLATFORM_PREPROCESSOR_URL: &str = "https://github.com/eips-wg/preprocessor.git";
+const PROPOSAL_TEMPLATE_URL: &str = "https://github.com/ritovision/eip-template.git";
+const PLATFORM_BUILD_EIPS_URL: &str = "https://github.com/ritovision/build-eips.git";
+const PLATFORM_BUILD_EIPS_DIR: &str = "build-eips";
 const PLATFORM_EIPW_URL: &str = "https://github.com/ethereum/eipw.git";
 const WORKSPACE_DOC_FILE: &str = "WORKSPACE.md";
 
@@ -44,7 +45,7 @@ struct DoctorReport {
 
 struct WorkspaceInitToolingRepositories<'a> {
     template: &'a Url,
-    preprocessor: &'a Url,
+    build_eips: &'a Url,
     eipw: &'a Url,
 }
 
@@ -666,13 +667,13 @@ pub(crate) fn init_workspace(
 ) -> Result<(), Whatever> {
     let template_repository = Url::parse(PROPOSAL_TEMPLATE_URL)
         .whatever_context("invalid proposal template repository URL")?;
-    let preprocessor_repository = Url::parse(PLATFORM_PREPROCESSOR_URL)
-        .whatever_context("invalid platform preprocessor repository URL")?;
+    let build_eips_repository = Url::parse(PLATFORM_BUILD_EIPS_URL)
+        .whatever_context("invalid platform build-eips repository URL")?;
     let eipw_repository =
         Url::parse(PLATFORM_EIPW_URL).whatever_context("invalid platform eipw repository URL")?;
     let repositories = WorkspaceInitToolingRepositories {
         template: &template_repository,
-        preprocessor: &preprocessor_repository,
+        build_eips: &build_eips_repository,
         eipw: &eipw_repository,
     };
 
@@ -735,12 +736,12 @@ fn init_workspace_with_repositories(
     }
 
     if platform_dev {
-        let preprocessor_path = workspace_root.join("preprocessor");
-        git::clone_missing_repo(repositories.preprocessor.as_str(), &preprocessor_path)
+        let build_eips_path = workspace_root.join(PLATFORM_BUILD_EIPS_DIR);
+        git::clone_missing_repo(repositories.build_eips.as_str(), &build_eips_path)
             .with_whatever_context(|_| {
                 format!(
-                    "unable to prepare workspace preprocessor repo at `{}`; destination must be missing or a usable git repository",
-                    preprocessor_path.to_string_lossy()
+                    "unable to prepare workspace build-eips repo at `{}`; destination must be missing or a usable git repository",
+                    build_eips_path.to_string_lossy()
                 )
             })?;
         let eipw_path = workspace_root.join("eipw");
@@ -815,8 +816,8 @@ mod tests {
 
     use super::{
         collect_doctor_report, doctor_root, init_workspace_with_repositories, workspace_doc_text,
-        WorkspaceInitToolingRepositories, PLATFORM_EIPW_URL, PLATFORM_PREPROCESSOR_URL,
-        PROPOSAL_TEMPLATE_URL, WORKSPACE_DOC_FILE,
+        WorkspaceInitToolingRepositories, PLATFORM_BUILD_EIPS_DIR, PLATFORM_BUILD_EIPS_URL,
+        PLATFORM_EIPW_URL, PROPOSAL_TEMPLATE_URL, WORKSPACE_DOC_FILE,
     };
 
     fn parse_args(arguments: &[&str]) -> Args {
@@ -1024,19 +1025,19 @@ base-url = "https://example.test/{sibling_id}/"
             theme_url,
             theme_commit,
             init_workspace_source_repo(remotes_root, "template"),
-            init_workspace_source_repo(remotes_root, "preprocessor"),
+            init_workspace_source_repo(remotes_root, PLATFORM_BUILD_EIPS_DIR),
             init_workspace_source_repo(remotes_root, "eipw"),
         )
     }
 
     fn tooling_repositories<'a>(
         template: &'a Url,
-        preprocessor: &'a Url,
+        build_eips: &'a Url,
         eipw: &'a Url,
     ) -> WorkspaceInitToolingRepositories<'a> {
         WorkspaceInitToolingRepositories {
             template,
-            preprocessor,
+            build_eips,
             eipw,
         }
     }
@@ -1089,11 +1090,11 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
         let repositories = WorkspaceInitToolingRepositories {
             template: &template_url,
-            preprocessor: &preprocessor_url,
+            build_eips: &build_eips_url,
             eipw: &eipw_url,
         };
         let active_path = workspace_root.join("Core");
@@ -1138,13 +1139,30 @@ base-url = "https://example.test/{sibling_id}/"
     fn tooling_repository_urls_remain_bootstrap_metadata() {
         for url in [
             PROPOSAL_TEMPLATE_URL,
-            PLATFORM_PREPROCESSOR_URL,
+            PLATFORM_BUILD_EIPS_URL,
             PLATFORM_EIPW_URL,
         ] {
             assert!(
                 Url::parse(url).is_ok(),
                 "expected valid tooling URL `{url}`"
             );
+        }
+    }
+
+    #[test]
+    fn tooling_repository_urls_use_final_canonical_repositories() {
+        assert_eq!(
+            PLATFORM_BUILD_EIPS_URL,
+            "https://github.com/ritovision/build-eips.git"
+        );
+        assert_eq!(
+            PROPOSAL_TEMPLATE_URL,
+            "https://github.com/ritovision/eip-template.git"
+        );
+        assert_eq!(PLATFORM_EIPW_URL, "https://github.com/ethereum/eipw.git");
+        assert_eq!(PLATFORM_BUILD_EIPS_DIR, "build-eips");
+        for url in [PROPOSAL_TEMPLATE_URL, PLATFORM_BUILD_EIPS_URL] {
+            assert!(!url.contains("eips-wg/"), "stale tooling URL `{url}`");
         }
     }
 
@@ -1205,6 +1223,7 @@ base-url = "https://example.test/{sibling_id}/"
             "--clean",
             "--remote-siblings",
             "--base-url",
+            "build-eips/",
         ] {
             assert!(
                 text.contains(expected),
@@ -1219,6 +1238,8 @@ base-url = "https://example.test/{sibling_id}/"
             "parity",
             "../WORKSPACE.md",
             "repo_id",
+            "preprocessor/",
+            "eips-wg/",
         ] {
             assert!(
                 !text.contains(removed),
@@ -1263,9 +1284,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let active_path = workspace_root.join("Core");
         let active_url = file_url(&active_path);
         write_manifest_repo_with_theme(
@@ -1297,9 +1318,9 @@ base-url = "https://example.test/{sibling_id}/"
         let pinned_commit = create_hidden_theme_commit(&theme_source, &theme_source_path);
         let theme_url = file_url(&theme_source_path);
         let template_url = init_workspace_source_repo(&remotes_root, "template");
-        let preprocessor_url = init_workspace_source_repo(&remotes_root, "preprocessor");
+        let build_eips_url = init_workspace_source_repo(&remotes_root, PLATFORM_BUILD_EIPS_DIR);
         let eipw_url = init_workspace_source_repo(&remotes_root, "eipw");
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let active_path = workspace_root.join("Core");
         let active_url = file_url(&active_path);
         write_manifest_repo_with_theme(
@@ -1332,9 +1353,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, _theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, _theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let active_path = workspace_root.join("Core");
         let active_url = file_url(&active_path);
         let missing_commit = "0000000000000000000000000000000000000000";
@@ -1360,9 +1381,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let existing_theme_path = workspace_root.join(config::DEFAULT_THEME_DIR);
         let existing_theme = init_repo(&existing_theme_path, &[("README.md", "local theme\n")]);
         let existing_head = repository_head(&existing_theme);
@@ -1393,9 +1414,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let theme_path = workspace_root.join(config::DEFAULT_THEME_DIR);
         write_file(&theme_path, "keep.txt", "do not overwrite\n");
         let active_path = workspace_root.join("Core");
@@ -1428,9 +1449,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let theme_path = workspace_root.join(config::DEFAULT_THEME_DIR);
         std::fs::create_dir_all(&theme_path).unwrap();
         Repository::init(&theme_path).unwrap();
@@ -1461,9 +1482,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let sibling_source_path = remotes_root.join("ERCs");
         init_repo(
             &sibling_source_path,
@@ -1496,9 +1517,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let sibling_source_path = remotes_root.join("ERCs");
         init_repo(
             &sibling_source_path,
@@ -1534,9 +1555,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let sibling_source_path = remotes_root.join("ERCs");
         init_repo(
             &sibling_source_path,
@@ -1575,9 +1596,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let active_path = temp.path().join("source/checkout-copy");
         let active_url = file_url(&active_path);
         write_manifest_repo_with_theme(
@@ -1610,9 +1631,9 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (_theme_url, _theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (_theme_url, _theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
-        let repositories = tooling_repositories(&template_url, &preprocessor_url, &eipw_url);
+        let repositories = tooling_repositories(&template_url, &build_eips_url, &eipw_url);
         let active_path = temp.path().join("source/no-manifest");
         init_repo(&active_path, &[("content/00001.md", "active\n")]);
 
@@ -1634,9 +1655,11 @@ base-url = "https://example.test/{sibling_id}/"
             expect_template
         );
         assert_eq!(
-            Repository::open(workspace_root.join("preprocessor")).is_ok(),
+            Repository::open(workspace_root.join(PLATFORM_BUILD_EIPS_DIR)).is_ok(),
             expect_platform_dev
         );
+        // The product checkout has one name; no legacy `preprocessor/` alias is created.
+        assert!(!workspace_root.join("preprocessor").exists());
         assert_eq!(
             Repository::open(workspace_root.join("eipw")).is_ok(),
             expect_platform_dev
@@ -1656,11 +1679,11 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
         let repositories = WorkspaceInitToolingRepositories {
             template: &template_url,
-            preprocessor: &preprocessor_url,
+            build_eips: &build_eips_url,
             eipw: &eipw_url,
         };
         let sibling_repositories = sibling_ids
@@ -1724,11 +1747,11 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
         let repositories = WorkspaceInitToolingRepositories {
             template: &template_url,
-            preprocessor: &preprocessor_url,
+            build_eips: &build_eips_url,
             eipw: &eipw_url,
         };
 
@@ -1794,11 +1817,11 @@ base-url = "https://example.test/{sibling_id}/"
         let temp = TempDir::new().unwrap();
         let workspace_root = temp.path().join("workspace");
         let remotes_root = temp.path().join("remotes");
-        let (theme_url, theme_commit, template_url, preprocessor_url, eipw_url) =
+        let (theme_url, theme_commit, template_url, build_eips_url, eipw_url) =
             workspace_init_test_repository_urls(&remotes_root);
         let repositories = WorkspaceInitToolingRepositories {
             template: &template_url,
-            preprocessor: &preprocessor_url,
+            build_eips: &build_eips_url,
             eipw: &eipw_url,
         };
         let active_path = workspace_root.join("Core");

@@ -1137,7 +1137,7 @@ fn materialize_dirty_tree(
         what: "find dirty materialization tree",
     })?;
 
-    let sig = Signature::now("eips-build", "eips-build@eips-build.invalid").context(GitSnafu {
+    let sig = Signature::now("build-eips", "build-eips@build-eips.invalid").context(GitSnafu {
         what: "dirty commit signature",
     })?;
     let parent = working_repo.find_commit(local_head).context(GitSnafu {
@@ -1711,7 +1711,7 @@ fn merge_sibling_repositories(
         check_ignored(working_repo, &merged_tree)?;
 
         let sig =
-            Signature::now("eips-build", "eips-build@eips-build.invalid").context(GitSnafu {
+            Signature::now("build-eips", "build-eips@build-eips.invalid").context(GitSnafu {
                 what: "commit signature",
             })?;
         let msg = format!("Merge {other_repo}");

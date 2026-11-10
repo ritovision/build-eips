@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn search_template_state_normalizes_base_path_and_bundle_path() {
         let root = Url::parse("https://wg-eips.ritovision.com/").unwrap();
-        let subpath = Url::parse("https://eips-wg.github.io/EIPs/").unwrap();
+        let subpath = Url::parse("https://example.test/EIPs/").unwrap();
 
         assert_eq!(
             SearchTemplateState::from_base_url(true, &root),
@@ -419,7 +419,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let state = SearchTemplateState::from_base_url(
             true,
-            &Url::parse("https://eips-wg.github.io/EIPs/").unwrap(),
+            &Url::parse("https://example.test/EIPs/").unwrap(),
         );
 
         let summary = write_search_route(temp.path(), state.clone()).unwrap();

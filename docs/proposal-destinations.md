@@ -1,6 +1,6 @@
 # Proposal destinations and rendered search contracts
 
-The preprocessor and theme form one pinned first-production pair. These generated
+`build-eips` and the theme form one pinned first-production pair. These generated
 contracts have not shipped. There is no support for intermediate prerelease shapes.
 
 ## Destinations
@@ -19,7 +19,7 @@ the same `meta` shape. The paired theme resolves local routes with `get_url` exa
 once; an omitted target uses `public_url` directly. It never feeds a deployment-prefixed
 path to `get_url`. Ordinary Markdown links to selected sources keep Zola source validation.
 Zola treats queries on `@/file.md?query` as part of the source filename. For query-
-bearing links, the preprocessor validates the source/asset and emits a relative
+bearing links, Markdown preprocessing validates the source/asset and emits a relative
 owned proposal/asset rendered route instead; the browser applies the deployment
 prefix once. Query and fragment bytes are then appended unchanged. Encoded asset
 source names use the same validated route path, classified after decoding once.

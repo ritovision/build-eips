@@ -2490,7 +2490,7 @@ mod tests {
     }
 
     #[test]
-    fn invalid_markers_fail_preprocessor_validation() {
+    fn invalid_markers_fail_preprocessing_validation() {
         let empty_marker = catalog(&[(
             "00001.md",
             meta_markdown(1, "Meta", "2024-01-01", "network-upgrade: \n", ""),

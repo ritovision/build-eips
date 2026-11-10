@@ -185,7 +185,7 @@ pub(crate) enum Operation {
         #[arg(long)]
         template: bool,
 
-        /// Also clone preprocessor and eipw for platform development
+        /// Also clone build-eips and eipw for platform development
         #[arg(long)]
         platform_dev: bool,
     },
