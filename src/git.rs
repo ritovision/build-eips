@@ -2278,6 +2278,12 @@ mod tests {
         index.remove_path(Path::new("A.md")).unwrap();
         index.add_path(Path::new("a.md")).unwrap();
         index.write().unwrap();
+        // Only Windows discards the staged-away spelling's case alias. Other
+        // case-insensitive volumes still report it, so the rename is
+        // validated once committed there.
+        if !case_sensitive && !cfg!(windows) {
+            commit_all(&repo, "case-only rename");
+        }
         super::validate_portable_worktree(&rename).unwrap();
 
         // This physical two-file state cannot exist on a case-insensitive

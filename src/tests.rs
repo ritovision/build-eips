@@ -374,11 +374,11 @@ fn workspace_local_sources_resolve_from_standard_layout() {
     );
     assert_eq!(
         resolved.repository_use.other_repos["EIPs"],
-        file_url(&eips_path)
+        file_url(&eips_path.canonicalize().unwrap())
     );
     assert_eq!(
         resolved.repository_use.other_repos["ERCs"],
-        file_url(&ercs_path)
+        file_url(&ercs_path.canonicalize().unwrap())
     );
 }
 

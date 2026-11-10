@@ -171,10 +171,23 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    /// Export deliberately refuses symlinked parents, and some hosts place
+    /// temp directories below one (macOS `/var` -> `/private/var`). Fixtures
+    /// use the real path; Windows keeps the plain spelling to avoid `\\?\`.
+    fn real_tempdir() -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let root = if cfg!(windows) {
+            dir.path().to_owned()
+        } else {
+            dir.path().canonicalize().unwrap()
+        };
+        (dir, root)
+    }
+
     #[test]
     fn export_refuses_overwrite_without_force_and_replaces_only_when_forced() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("corpus.json");
+        let (_dir, root) = real_tempdir();
+        let file = root.join("corpus.json");
         ExportDestination::new(&file, false)
             .unwrap()
             .write(&json!({"first":true}))
@@ -185,49 +198,49 @@ mod tests {
             .write(&json!({"second":true}))
             .unwrap();
         assert_eq!(fs::read_to_string(file).unwrap(), "{\"second\":true}\n");
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
     }
 
     #[test]
     fn export_requires_existing_directory_parent_and_regular_leaf() {
-        let dir = tempfile::tempdir().unwrap();
-        assert!(ExportDestination::new(&dir.path().join("missing/out"), false).is_err());
-        assert!(ExportDestination::new(dir.path(), true).is_err());
+        let (_dir, root) = real_tempdir();
+        assert!(ExportDestination::new(&root.join("missing/out"), false).is_err());
+        assert!(ExportDestination::new(&root, true).is_err());
         assert!(ExportDestination::new(Path::new(""), false).is_err());
         for relative in ["new/", "new/.", "new/.."] {
-            assert!(ExportDestination::new(&dir.path().join(relative), true).is_err());
+            assert!(ExportDestination::new(&root.join(relative), true).is_err());
         }
-        fs::write(dir.path().join("file"), "KEEP").unwrap();
-        assert!(ExportDestination::new(&dir.path().join("file/out"), true).is_err());
-        assert!(ExportDestination::new(&dir.path().join("./file"), false).is_err());
+        fs::write(root.join("file"), "KEEP").unwrap();
+        assert!(ExportDestination::new(&root.join("file/out"), true).is_err());
+        assert!(ExportDestination::new(&root.join("./file"), false).is_err());
     }
 
     #[cfg(unix)]
     #[test]
     fn export_refuses_symlink_leaf_parent_and_dangling_link_even_with_force() {
         use std::os::unix::fs::symlink;
-        let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("keep"), "KEEP").unwrap();
-        fs::create_dir(dir.path().join("real")).unwrap();
-        symlink(dir.path().join("keep"), dir.path().join("leaf")).unwrap();
-        symlink(dir.path().join("absent"), dir.path().join("dangling")).unwrap();
-        symlink(dir.path().join("real"), dir.path().join("alias")).unwrap();
+        let (_dir, root) = real_tempdir();
+        fs::write(root.join("keep"), "KEEP").unwrap();
+        fs::create_dir(root.join("real")).unwrap();
+        symlink(root.join("keep"), root.join("leaf")).unwrap();
+        symlink(root.join("absent"), root.join("dangling")).unwrap();
+        symlink(root.join("real"), root.join("alias")).unwrap();
         for relative in ["leaf", "dangling", "alias/output", "alias/../output"] {
             assert!(
-                ExportDestination::new(&dir.path().join(relative), true).is_err(),
+                ExportDestination::new(&root.join(relative), true).is_err(),
                 "{relative}"
             );
         }
-        let destination = ExportDestination::new(&dir.path().join("late"), true).unwrap();
-        symlink(dir.path().join("keep"), destination.path()).unwrap();
+        let destination = ExportDestination::new(&root.join("late"), true).unwrap();
+        symlink(root.join("keep"), destination.path()).unwrap();
         assert!(destination.write(&json!({"new":true})).is_err());
-        assert_eq!(fs::read_to_string(dir.path().join("keep")).unwrap(), "KEEP");
+        assert_eq!(fs::read_to_string(root.join("keep")).unwrap(), "KEEP");
     }
 
     #[test]
     fn new_occupant_and_serialization_error_preserve_destination() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("corpus.json");
+        let (_dir, root) = real_tempdir();
+        let file = root.join("corpus.json");
         let destination = ExportDestination::new(&file, false).unwrap();
         fs::write(&file, "KEEP").unwrap();
         assert!(destination.write(&json!({"new":true})).is_err());
@@ -242,16 +255,16 @@ mod tests {
             .write(&Broken)
             .is_err());
         assert_eq!(fs::read_to_string(&file).unwrap(), "KEEP");
-        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 1);
+        assert_eq!(fs::read_dir(&root).unwrap().count(), 1);
     }
 
     #[test]
     fn extraction_failure_preserves_previous_export() {
-        let dir = tempfile::tempdir().unwrap();
-        let rendered = dir.path().join("rendered");
+        let (_dir, root) = real_tempdir();
+        let rendered = root.join("rendered");
         fs::create_dir(&rendered).unwrap();
         fs::write(rendered.join("bad.html"), [0xff]).unwrap();
-        let file = dir.path().join("corpus.json");
+        let file = root.join("corpus.json");
         fs::write(&file, "KEEP").unwrap();
         let dest = ExportDestination::new(&file, true).unwrap();
         assert!(export_corpus(
@@ -267,8 +280,8 @@ mod tests {
 
     #[test]
     fn export_encodes_filesystem_segments_exactly_once() {
-        let dir = tempfile::tempdir().unwrap();
-        let rendered = dir.path().join("rendered");
+        let (_dir, root) = real_tempdir();
+        let rendered = root.join("rendered");
         let special = rendered.join("reference/café 100% #/");
         fs::create_dir_all(&special).unwrap();
         fs::write(
@@ -276,7 +289,7 @@ mod tests {
             "<main data-pagefind-body><h2 id='section% café'>Section</h2><p>Body.</p></main>",
         )
         .unwrap();
-        let dest = ExportDestination::new(&dir.path().join("out.json"), false).unwrap();
+        let dest = ExportDestination::new(&root.join("out.json"), false).unwrap();
         export_corpus(
             &rendered,
             &Url::parse("https://example.test/wg/EIPs/").unwrap(),
@@ -299,8 +312,8 @@ mod tests {
 
     #[test]
     fn all_formats_resolve_absolute_urls_and_preserve_heading_and_source_context() {
-        let dir = tempfile::tempdir().unwrap();
-        let rendered = dir.path().join("rendered");
+        let (_dir, root) = real_tempdir();
+        let rendered = root.join("rendered");
         fs::create_dir_all(rendered.join("1559")).unwrap();
         fs::write(rendered.join("1559/index.html"),
             "<main data-pagefind-body><span data-pagefind-meta=\"proposal:EIP-1559\"></span><h2 id=\"abstract\">Abstract</h2><p>Body.</p></main>").unwrap();
@@ -316,7 +329,7 @@ mod tests {
                 let mut source = super::super::tests::fixture_source();
                 source.base_url = base.to_owned();
                 source.only = Some(vec![1559]);
-                let dest = ExportDestination::new(&dir.path().join("export.json"), true).unwrap();
+                let dest = ExportDestination::new(&root.join("export.json"), true).unwrap();
                 export_corpus(&rendered, &Url::parse(base).unwrap(), source, format, &dest)
                     .unwrap();
                 let value: serde_json::Value =
