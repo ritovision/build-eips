@@ -18,7 +18,9 @@ build-eips
 
 ### Pre-compiled Binaries
 
-Pre-compiled binaries for Ubuntu, Windows, and macOS will be published on [GitHub Releases]. No `build-eips` release has been published yet, so install from source until the first release is cut; release publication is a separate rollout step.
+Versioned prereleases of `build-eips` are distributed from [GitHub Releases]. The first release candidate is **`v0.1.0-rc.1`**, with checksum-verified archives for Linux x86-64, Windows x86-64, macOS Apple Silicon (arm64), and macOS Intel (x86-64). Each release asset has a matching `.sha256` file. The installation scripts in EIPs, ERCs, and the theme can install that verified release once they are updated to use its exact versioned download URL.
+
+This is a **working-group evaluation release**, not an Ethereum Foundation release or a deployment of the official proposal websites. For source installation, use the command below.
 
 [GitHub Releases]: https://github.com/ritovision/build-eips/releases
 
